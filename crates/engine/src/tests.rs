@@ -281,6 +281,7 @@ fn typed_references_to_workbooks_that_are_not_linked_are_refused_on_entry() {
             refresh_error: false,
         }],
         names: vec![],
+        ..Default::default()
     };
     let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
     wb.external_books = vec![link.clone()].into();
@@ -316,7 +317,7 @@ fn typed_references_to_workbooks_that_are_not_linked_are_refused_on_entry() {
     // In another workbook it's kept only where that workbook holds the same link at that index;
     // otherwise `[1]` there would be a link it doesn't have (or a different workbook): `#REF!`.
     let other =
-        gridcraft_model::ExternalBook { sheets: vec![gridcraft_model::ExternalSheet { name: "T".into(), ..Default::default() }], names: vec![] };
+        gridcraft_model::ExternalBook { sheets: vec![gridcraft_model::ExternalSheet { name: "T".into(), ..Default::default() }], names: vec![], ..Default::default() };
     for (books, formula) in [(vec![], "=#REF!"), (vec![other], "=#REF!"), (vec![link], "=[1]S!$A$1")] {
         s.new_workbook();
         std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).external_books = books.into();
