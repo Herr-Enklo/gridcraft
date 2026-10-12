@@ -1565,6 +1565,32 @@ mod tests {
     }
 
     #[test]
+    fn data_tables_stay_live_through_xlsx() {
+        let mut s = s();
+        loan(&mut s);
+        s.execute("data.dataTable", json!({"range": "D2:E5", "columnInput": "B2"})).unwrap();
+        s.execute("cell.set", json!({"cell": "G1", "input": "=B2*B1"})).unwrap();
+        s.execute("range.setValues", json!({"range": "H1", "values": [[1, 2]]})).unwrap();
+        s.execute("range.setValues", json!({"range": "G2", "values": [[10], [20]]})).unwrap();
+        s.execute("data.dataTable", json!({"range": "G1:I3", "rowInput": "B1", "columnInput": "B2"})).unwrap();
+        let before = tables(&s);
+        let b64 = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["base64"].as_str().unwrap().to_string();
+        s.execute("file.open", json!({"name": "dt.xlsx", "base64": b64})).unwrap();
+        let mut after = tables(&s);
+        after.sort_by_key(|t| t.range.start.col);
+        assert_eq!(after, before);
+        assert!((n(&s, "E4") - 210.0).abs() < 1e-9);
+        assert_eq!(n(&s, "I3"), 40.0);
+        assert_eq!(s.execute("cell.get", json!({"cell": "H2"})).unwrap()["formula"], "{=TABLE(B1,B2)}");
+        // Still live after reopening.
+        s.execute("cell.set", json!({"cell": "B1", "input": "1"})).unwrap();
+        assert_eq!(n(&s, "E4"), 400.0);
+        assert_eq!(n(&s, "I3"), 40.0);
+        s.execute("cell.set", json!({"cell": "G1", "input": "=B2*B1*2"})).unwrap();
+        assert_eq!(n(&s, "I3"), 80.0);
+    }
+
+    #[test]
     fn static_data_tables_write_values() {
         let mut s = s();
         loan(&mut s);
