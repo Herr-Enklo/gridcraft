@@ -122,6 +122,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                                     ("years", "Group by Years"),
                                     ("quarters", "Group by Quarters"),
                                     ("months", "Group by Months"),
+                                    ("range", "Group by Ranges of 10"),
                                     ("none", "Ungroup"),
                                 ] {
                                     if ui.button(l).clicked() {

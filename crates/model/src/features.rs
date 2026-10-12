@@ -882,6 +882,76 @@ pub enum PivotDateGroup {
     Days,
 }
 
+/// Grouping of a number field into ranges of equal width (Group › Starting at, Ending at, By).
+/// Values below `start` fall into one `<start` item and values above `end` into one `>end` item.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PivotNumberGroup {
+    pub start: f64,
+    pub end: f64,
+    /// Width of each range; positive.
+    pub by: f64,
+}
+
+impl PivotNumberGroup {
+    /// Most ranges a grouping may make (Excel's own limit on group items is lower).
+    pub const MAX_RANGES: f64 = 100_000.0;
+
+    /// The grouping, if its bounds and width are usable: finite, `start <= end`, a positive
+    /// width and at most [`Self::MAX_RANGES`] ranges.
+    pub fn checked(start: f64, end: f64, by: f64) -> Option<PivotNumberGroup> {
+        let ok = start.is_finite() && end.is_finite() && by.is_finite() && by > 0.0 && start <= end && (end - start) / by < Self::MAX_RANGES;
+        ok.then_some(PivotNumberGroup { start, end, by })
+    }
+
+    /// The position of the range that holds `n` (0 for the range starting at `start`).
+    pub fn range_index(&self, n: f64) -> i64 {
+        let by = if self.by > 0.0 && self.by.is_finite() { self.by } else { 1.0 };
+        let k = ((n - self.start) / by).floor();
+        if k.is_finite() { k.clamp(-1e15, 1e15) as i64 } else { 0 }
+    }
+
+    /// The lower bound of range `k`.
+    pub fn range_start(&self, k: i64) -> f64 {
+        self.start + k as f64 * self.by
+    }
+
+    /// The caption of range `k`: `0-9` when the start and width are whole numbers (the range
+    /// covers whole numbers up to one below the next start), otherwise `0-0.5`.
+    pub fn caption(&self, k: i64) -> String {
+        let lo = self.range_start(k);
+        let whole = self.start.fract() == 0.0 && self.by.fract() == 0.0 && self.by >= 1.0;
+        let hi = if whole { lo + self.by - 1.0 } else { lo + self.by };
+        format!("{}-{}", tidy_number(lo), tidy_number(hi))
+    }
+
+    /// The caption of the item for values below `start`.
+    pub fn below_caption(&self) -> String {
+        format!("<{}", tidy_number(self.start))
+    }
+
+    /// The caption of the item for values above `end`.
+    pub fn above_caption(&self) -> String {
+        format!(">{}", tidy_number(self.end))
+    }
+
+    /// Captions of every item in order: `<start`, each range up to the one holding `end`, `>end`.
+    pub fn captions(&self) -> Vec<String> {
+        let last = self.range_index(self.end).clamp(0, Self::MAX_RANGES as i64);
+        let mut v = Vec::with_capacity(last as usize + 3);
+        v.push(self.below_caption());
+        v.extend((0..=last).map(|k| self.caption(k)));
+        v.push(self.above_caption());
+        v
+    }
+}
+
+/// A number as text without the binary noise of repeated additions (`0.30000000000000004`).
+fn tidy_number(x: f64) -> String {
+    let x = if x.abs() < 1e12 { (x * 1e9).round() / 1e9 } else { x };
+    // `+ 0.0` turns a rounded -0 into 0.
+    gridcraft_core::number_to_text(x + 0.0)
+}
+
 /// A field placed in the Rows or Columns area.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -890,6 +960,8 @@ pub struct PivotField {
     pub source_col: String,
     pub sort: PivotSort,
     pub date_group: PivotDateGroup,
+    /// Number range grouping; when set, `date_group` is `None`.
+    pub number_group: Option<PivotNumberGroup>,
     /// Item labels whose detail is hidden (collapsed).
     pub collapsed_items: Vec<String>,
 }
