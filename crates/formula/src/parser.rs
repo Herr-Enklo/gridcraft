@@ -473,8 +473,16 @@ pub fn parse_struct(table: &str, body: &str) -> Result<StructRef, String> {
     if !body.starts_with('[') {
         // Simple: [Col], [@Col], [#Headers], [@]
         if let Some(rest) = body.strip_prefix('@') {
-            specifiers.push(StructItem::ThisRow);
             let rest = rest.trim();
+            if rest.starts_with('[') && rest.contains("]:") {
+                // `[@[Col1]:[Col3]]`: this row of a column range.
+                let inner = parse_struct(table, rest)?;
+                if !inner.specifiers.is_empty() {
+                    return Err(unexpected(rest));
+                }
+                return Ok(StructRef { specifiers: vec![StructItem::ThisRow], ..inner });
+            }
+            specifiers.push(StructItem::ThisRow);
             let rest = rest.strip_prefix('[').and_then(|r| r.strip_suffix(']')).unwrap_or(rest);
             if !rest.is_empty() {
                 cols.push(column(rest)?);

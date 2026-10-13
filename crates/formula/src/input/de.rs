@@ -1,18 +1,25 @@
 //! Deutsch (Deutschland): the formula words German Excel shows (function names, booleans, errors,
 //! structured-reference specifiers) and its formula separators.
 //!
-//! Function names come from Microsoft Support's de-de Excel function pages (retrieved
-//! 2026-10-10; the pages are machine-translated): per page, a vote among the title, the meta
-//! description, the syntax paragraph (aligned with the en-US page) and `=NAME(` examples, and an
-//! entry needs two agreeing signals. Entries marked `reviewed` were decided by hand from the page
-//! evidence and independent function-name references. Functions not listed keep their English name.
+//! Observed black-box in Excel 365 (German interface, de-DE regional format) on 2026-10-13 through
+//! its automation interface, in synthetic workbooks that were never saved: every function
+//! GridCraft knows (and GETPIVOTDATA, IMAGE, TRANSLATE and DETECTLANGUAGE, which it doesn't yet)
+//! was entered in canonical form (`Range.Formula2`) and read back as German Excel shows it
+//! (`Range.Formula2Local`). Never copied from a string table or a help page. The 99 functions not
+//! listed kept their English name there, among them ABS, ASC, BAHTTEXT, the BESSEL functions,
+//! CODE, COS, FILTER, INDEX, LAMBDA, LET, MAP, MAX, MIN, REDUCE, SCAN, TEXT and USDOLLAR.
 //!
-//! Sources for the other words:
-//! - bool: https://support.microsoft.com/de-de/excel/functions/cell-function (WAHR/FALSCH) | https://support.microsoft.com/de-de/excel/is-functions
-//! - table_items: https://it-service-ruhr.de/excel-strukturierte-verweise/ ([#Alle] [#Kopfzeilen] [#Daten] [#Ergebnisse] [#Diese Zeile]) | https://fasteasy.at/tippshop/index.php?mp=1&id=1&id2=17&id3=1728 (#Alle #Daten #Kopfzeilen #Ergebnisse, "[#Diese Zeile]")
-//! - errors.#WERT!..#NV,#DATEN_ABRUFEN: https://support.microsoft.com/de-de/excel/functions/error-type-function (ERROR.TYPE table) | https://support.microsoft.com/de-de/excel/functions/cubemember-function ("#DATEN_ABRUFEN…")
-//! - errors.#SPILL!: https://support.microsoft.com/de-de/excel/how-to-correct-a-spill-error (title "#ÜBERLAUF!-Fehler")
-//! - errors.#CALC!: https://support.microsoft.com/de-de/excel/functions/lambda-function ("#KALK!-Fehlermeldung") | https://excelhero.de/funktionen/excel-filter-funktion/ | https://www.tabellenexperte.de/die-neue-filter-funktion-mit-jokersuche/ | https://www.tippscout.de/excel-daten-filtern-ganz-einfach.html
+//! Other words, observed the same way:
+//! - separators: `=SUMME(1;2)`, `=1,5+2,25`, `={1.2.3}` (columns), `={1;2;3}` (rows),
+//!   `={1.2;3.4}`; union `=SUMME(A1:A2;B1:B2)`.
+//! - bool: `WAHR`, `FALSCH` (also typed into cells; `TRUE` typed there stays text).
+//! - errors: #NULL!, #DIV/0!, #WERT!, #BEZUG!, #NAME?, #ZAHL!, #NV and #DATEN_ABRUFEN as formula
+//!   literals and cell values; #ÜBERLAUF! is what a blocked spill shows and #CALC! what `=LAMBDA(x;x)`
+//!   and an empty `=FILTER(…)` show (German Excel keeps #CALC! in English; neither is accepted as a
+//!   typed literal there).
+//! - table_items: `Tbl[[#Kopfzeilen];[H1]]`, `[#Alle]`, `[#Daten]`, `[#Ergebnisse]`, `;` between
+//!   bracketed items; `[#Diese Zeile]` is accepted when typed and shown in the `@` short form
+//!   (`Tbl[@H1]`, `Tbl[@[H1]:[H2]]`, `Tbl[@]`), as canonical text already spells it.
 
 use super::Dialect;
 use gridcraft_core::CellError;
@@ -34,7 +41,7 @@ pub(super) const DIALECT: Dialect = Dialect {
         (CellError::NA, "#NV"),
         (CellError::GettingData, "#DATEN_ABRUFEN"),
         (CellError::Spill, "#ÜBERLAUF!"),
-        (CellError::Calc, "#KALK!"),
+        (CellError::Calc, "#CALC!"),
     ],
     table_items: ["#Alle", "#Daten", "#Kopfzeilen", "#Ergebnisse", "#Diese Zeile"],
     functions: &[
@@ -76,9 +83,7 @@ pub(super) const DIALECT: Dialect = Dialect {
         ("BITOR", "BITODER"),
         ("BITRSHIFT", "BITRVERSCHIEB"),
         ("BITXOR", "BITXODER"),
-        // reviewed: sidebar link on MS de-de function pages (page body left BYCOL); pairs with BYROW=NACHZEILE | sources: https://support.microsoft.com/de-de/excel/functions/bycol-function
         ("BYCOL", "NACHSPALTE"),
-        // reviewed: sidebar link on MS de-de function pages (page body left BYROW) | sources: https://support.microsoft.com/de-de/excel/functions/byrow-function
         ("BYROW", "NACHZEILE"),
         ("CEILING", "OBERGRENZE"),
         ("CEILING.MATH", "OBERGRENZE.MATHEMATIK"),
@@ -93,7 +98,6 @@ pub(super) const DIALECT: Dialect = Dialect {
         ("CHISQ.TEST", "CHIQU.TEST"),
         ("CHOOSE", "WAHL"),
         ("CHOOSECOLS", "SPALTENWAHL"),
-        // reviewed: sidebar link; pairs with CHOOSECOLS=SPALTENWAHL (agreeing vote); page example uses MT variant ZEILENAUSWAHL | sources: https://support.microsoft.com/de-de/excel/functions/chooserows-function
         ("CHOOSEROWS", "ZEILENWAHL"),
         ("CLEAN", "SÄUBERN"),
         ("COLUMN", "SPALTE"),
@@ -112,7 +116,6 @@ pub(super) const DIALECT: Dialect = Dialect {
         ("COTH", "COTHYP"),
         ("COUNT", "ANZAHL"),
         ("COUNTA", "ANZAHL2"),
-        // reviewed: page title ANZAHLLEEREZELLEN; meta/syntax ANZAHLLEERE/ANZAHLLEER are MT truncations; en-US COUNTBLANK page | sources: https://support.microsoft.com/de-de/excel/functions/countblank-function
         ("COUNTBLANK", "ANZAHLLEEREZELLEN"),
         ("COUNTIF", "ZÄHLENWENN"),
         ("COUNTIFS", "ZÄHLENWENNS"),
@@ -152,12 +155,12 @@ pub(super) const DIALECT: Dialect = Dialect {
         ("DEC2OCT", "DEZINOKT"),
         ("DECIMAL", "DEZIMAL"),
         ("DEGREES", "GRAD"),
+        ("DETECTLANGUAGE", "SPRACHEERKENNEN"),
         ("DEVSQ", "SUMQUADABW"),
         ("DGET", "DBAUSZUG"),
         ("DISC", "DISAGIO"),
         ("DMAX", "DBMAX"),
         ("DMIN", "DBMIN"),
-        // reviewed: page title "DM"; German Excel DOLLAR is DM (meta/syntax left English) | sources: https://support.microsoft.com/de-de/excel/functions/dollar-function
         ("DOLLAR", "DM"),
         ("DOLLARDE", "NOTIERUNGDEZ"),
         ("DOLLARFR", "NOTIERUNGBRU"),
@@ -182,7 +185,6 @@ pub(super) const DIALECT: Dialect = Dialect {
         ("EXPAND", "ERWEITERN"),
         ("EXPON.DIST", "EXPON.VERT"),
         ("EXPONDIST", "EXPONVERT"),
-        // reviewed: page title F.VERT + sidebar; F.DIST.RT=F.VERT.RE agrees | sources: https://support.microsoft.com/de-de/excel/functions/f-dist-function
         ("F.DIST", "F.VERT"),
         ("F.DIST.RT", "F.VERT.RE"),
         ("F.INV.RT", "F.INV.RE"),
@@ -191,17 +193,17 @@ pub(super) const DIALECT: Dialect = Dialect {
         ("FALSE", "FALSCH"),
         ("FDIST", "FVERT"),
         ("FILTERXML", "XMLFILTERN"),
-        // reviewed: SEARCH page: "…Groß- und Kleinschreibung… können Sie FINDEN verwenden" (FIND page retired) | sources: https://support.microsoft.com/de-de/excel/functions/search-function
         ("FIND", "FINDEN"),
-        // reviewed: B-variant pattern of FINDEN (LINKSB, TEILB, RECHTSB, LÄNGEB, SUCHENB documented); name itself not on a cached page [inferred] | sources: https://support.microsoft.com/de-de/excel/functions/c7912941-af2a-4bdf-a553-d0d89b0a0628
         ("FINDB", "FINDENB"),
         ("FIXED", "FEST"),
         ("FLOOR", "UNTERGRENZE"),
         ("FLOOR.MATH", "UNTERGRENZE.MATHEMATIK"),
         ("FLOOR.PRECISE", "UNTERGRENZE.GENAU"),
-        // reviewed: page: "PROGNOSE.LINEAR(x;Y_Werte;X_Werte) oder SCHÄTZER(x;Y_Werte;X_Werte)"; PROGNOSE replaced SCHÄTZER only as .LINEAR | sources: https://support.microsoft.com/de-de/excel/forecast-and-forecast-linear-functions
         ("FORECAST", "SCHÄTZER"),
-        // reviewed: same page syntax and example =PROGNOSE.LINEAR(30,A2:A6,B2:B6) | sources: https://support.microsoft.com/de-de/excel/forecast-and-forecast-linear-functions
+        ("FORECAST.ETS", "PROGNOSE.ETS"),
+        ("FORECAST.ETS.CONFINT", "PROGNOSE.ETS.KONFINT"),
+        ("FORECAST.ETS.SEASONALITY", "PROGNOSE.ETS.SAISONALITÄT"),
+        ("FORECAST.ETS.STAT", "PROGNOSE.ETS.STAT"),
         ("FORECAST.LINEAR", "PROGNOSE.LINEAR"),
         ("FORMULATEXT", "FORMELTEXT"),
         ("FREQUENCY", "HÄUFIGKEIT"),
@@ -213,6 +215,7 @@ pub(super) const DIALECT: Dialect = Dialect {
         ("GCD", "GGT"),
         ("GEOMEAN", "GEOMITTEL"),
         ("GESTEP", "GGANZZAHL"),
+        ("GETPIVOTDATA", "PIVOTDATENZUORDNEN"),
         ("GROUPBY", "GRUPPIERENNACH"),
         ("GROWTH", "VARIATION"),
         ("HARMEAN", "HARMITTEL"),
@@ -228,6 +231,7 @@ pub(super) const DIALECT: Dialect = Dialect {
         ("IFERROR", "WENNFEHLER"),
         ("IFNA", "WENNNV"),
         ("IFS", "WENNS"),
+        ("IMAGE", "BILD"),
         ("IMAGINARY", "IMAGINÄRTEIL"),
         ("IMCONJUGATE", "IMKONJUGIERTE"),
         ("IMCOSH", "IMCOSHYP"),
@@ -246,31 +250,20 @@ pub(super) const DIALECT: Dialect = Dialect {
         ("INTRATE", "ZINSSATZ"),
         ("IPMT", "ZINSZ"),
         ("IRR", "IKV"),
-        // reviewed: IS-functions page syntax list and examples =ISTLEER(A2) | sources: https://support.microsoft.com/de-de/excel/is-functions
         ("ISBLANK", "ISTLEER"),
-        // reviewed: IS-functions page syntax list, example =ISTFEHL(A6) | sources: https://support.microsoft.com/de-de/excel/is-functions
         ("ISERR", "ISTFEHL"),
-        // reviewed: IS-functions page syntax list, example =WENN(ISTFEHLER(A1)… | sources: https://support.microsoft.com/de-de/excel/is-functions
         ("ISERROR", "ISTFEHLER"),
         ("ISEVEN", "ISTGERADE"),
         ("ISFORMULA", "ISTFORMEL"),
-        // reviewed: IS-functions page syntax list, example =ISTLOG(WAHR) | sources: https://support.microsoft.com/de-de/excel/is-functions
         ("ISLOGICAL", "ISTLOG"),
-        // reviewed: IS-functions page syntax list, example =ISTNV(A4) | sources: https://support.microsoft.com/de-de/excel/is-functions
         ("ISNA", "ISTNV"),
-        // reviewed: IS-functions page syntax list ISTKTEXT(Wert) and description row | sources: https://support.microsoft.com/de-de/excel/is-functions
         ("ISNONTEXT", "ISTKTEXT"),
-        // reviewed: IS-functions page syntax list, example =ISTZAHL(4) | sources: https://support.microsoft.com/de-de/excel/is-functions
         ("ISNUMBER", "ISTZAHL"),
         ("ISO.CEILING", "ISO.OBERGRENZE"),
-        // reviewed: live MS page https://support.microsoft.com/de-de/excel/functions/isodd-function: title/syntax/examples ISTUNGERADE (the IS-functions page shows MT-garbled "ISUNGERADE")
         ("ISODD", "ISTUNGERADE"),
-        // reviewed: ISOMITTED page syntax and example | sources: https://support.microsoft.com/de-de/excel/functions/isomitted-function
         ("ISOMITTED", "WURDEAUSGELASSEN"),
         ("ISOWEEKNUM", "ISOKALENDERWOCHE"),
-        // reviewed: IS-functions page syntax list, example =ISTBEZUG(G8) | sources: https://support.microsoft.com/de-de/excel/is-functions
         ("ISREF", "ISTBEZUG"),
-        // reviewed: IS-functions page syntax list, example =ISTTEXT(A3) | sources: https://support.microsoft.com/de-de/excel/is-functions
         ("ISTEXT", "ISTTEXT"),
         ("LARGE", "KGRÖSSTE"),
         ("LCM", "KGV"),
@@ -284,10 +277,7 @@ pub(super) const DIALECT: Dialect = Dialect {
         ("LOGNORMDIST", "LOGNORMVERT"),
         ("LOOKUP", "VERWEIS"),
         ("LOWER", "KLEIN"),
-        // reviewed: sidebar link on MS de-de function pages (page body left MAKEARRAY) | sources: https://support.microsoft.com/de-de/excel/functions/makearray-function
         ("MAKEARRAY", "MATRIXERSTELLEN"),
-        // reviewed: MAP page syntax "=ZUORDNEN (Array1; lambda_or_array<#>)" and example; sidebar says KARTE (MT of the title) – rejected | sources: https://support.microsoft.com/de-de/excel/functions/map-function
-        ("MAP", "ZUORDNEN"),
         ("MATCH", "VERGLEICH"),
         ("MAXIFS", "MAXWENNS"),
         ("MDETERM", "MDET"),
@@ -323,11 +313,16 @@ pub(super) const DIALECT: Dialect = Dialect {
         ("OCT2DEC", "OKTINDEZ"),
         ("OCT2HEX", "OKTINHEX"),
         ("ODD", "UNGERADE"),
+        ("ODDFPRICE", "UNREGER.KURS"),
+        ("ODDFYIELD", "UNREGER.REND"),
+        ("ODDLPRICE", "UNREGLE.KURS"),
+        ("ODDLYIELD", "UNREGLE.REND"),
         ("OFFSET", "BEREICH.VERSCHIEBEN"),
         ("OR", "ODER"),
         ("PERCENTILE", "QUANTIL"),
         ("PERCENTILE.EXC", "QUANTIL.EXKL"),
         ("PERCENTILE.INC", "QUANTIL.INKL"),
+        ("PERCENTOF", "PROZENTVON"),
         ("PERCENTRANK", "QUANTILSRANG"),
         ("PERCENTRANK.EXC", "QUANTILSRANG.EXKL"),
         ("PERCENTRANK.INC", "QUANTILSRANG.INKL"),
@@ -356,8 +351,10 @@ pub(super) const DIALECT: Dialect = Dialect {
         ("RANK.EQ", "RANG.GLEICH"),
         ("RATE", "ZINS"),
         ("RECEIVED", "AUSZAHLUNG"),
+        ("REGEXEXTRACT", "REGEXEXTRAHIEREN"),
+        ("REGEXREPLACE", "REGEXERSETZEN"),
+        ("REGEXTEST", "REGEXTESTEN"),
         ("REPLACE", "ERSETZEN"),
-        // reviewed: B-variant pattern of ERSETZEN; not named on a cached page [inferred] | sources: https://support.microsoft.com/de-de/excel/functions/replace-function
         ("REPLACEB", "ERSETZENB"),
         ("REPT", "WIEDERHOLEN"),
         ("RIGHT", "RECHTS"),
@@ -407,7 +404,6 @@ pub(super) const DIALECT: Dialect = Dialect {
         ("SUMX2MY2", "SUMMEX2MY2"),
         ("SUMX2PY2", "SUMMEX2PY2"),
         ("SUMXMY2", "SUMMEXMY2"),
-        // reviewed: SWITCH page meta + examples + sidebar | sources: https://support.microsoft.com/de-de/excel/functions/switch-function
         ("SWITCH", "ERSTERWERT"),
         ("SYD", "DIA"),
         ("T.DIST", "T.VERT"),
@@ -420,21 +416,20 @@ pub(super) const DIALECT: Dialect = Dialect {
         ("TBILLPRICE", "TBILLKURS"),
         ("TBILLYIELD", "TBILLRENDITE"),
         ("TDIST", "TVERT"),
-        // reviewed: TEXTAFTER page title + meta (TEXTNACH); syntax paragraph left English | sources: https://support.microsoft.com/de-de/excel/functions/textafter-function
         ("TEXTAFTER", "TEXTNACH"),
-        // reviewed: page syntax + examples + sidebar (title/meta left English) | sources: https://support.microsoft.com/de-de/excel/functions/textbefore-function
         ("TEXTBEFORE", "TEXTVOR"),
         ("TEXTJOIN", "TEXTVERKETTEN"),
-        // reviewed: page syntax/examples and MS TEXTSPLIT page example =TEXTTEILEN(A1,{",","."}) | sources: https://support.microsoft.com/de-de/excel/functions/textsplit-function | https://support.microsoft.com/de-de/office/textsplit-funktion-b1ca414e-4c21-4ca0-b1b7-bdecace8a6e7
         ("TEXTSPLIT", "TEXTTEILEN"),
         ("TIME", "ZEIT"),
         ("TIMEVALUE", "ZEITWERT"),
         ("TOCOL", "ZUSPALTE"),
         ("TODAY", "HEUTE"),
         ("TOROW", "ZUZEILE"),
+        ("TRANSLATE", "ÜBERSETZEN"),
         ("TRANSPOSE", "MTRANS"),
         ("TRIM", "GLÄTTEN"),
         ("TRIMMEAN", "GESTUTZTMITTEL"),
+        ("TRIMRANGE", "ABSCHNBEREICH"),
         ("TRUE", "WAHR"),
         ("TRUNC", "KÜRZEN"),
         ("TYPE", "TYP"),
@@ -442,7 +437,6 @@ pub(super) const DIALECT: Dialect = Dialect {
         ("UNIQUE", "EINDEUTIG"),
         ("UPPER", "GROSS"),
         ("VALUE", "WERT"),
-        // reviewed: page syntax "WERTZUTEXT(Wert;[Format])" + sidebar; pairs with ARRAYTOTEXT=MATRIXZUTEXT | sources: https://support.microsoft.com/de-de/excel/functions/valuetotext-function
         ("VALUETOTEXT", "WERTZUTEXT"),
         ("VAR", "VARIANZ"),
         ("VARA", "VARIANZA"),
@@ -456,9 +450,7 @@ pub(super) const DIALECT: Dialect = Dialect {
         ("WEIBULL.DIST", "WEIBULL.VERT"),
         ("WORKDAY", "ARBEITSTAG"),
         ("WORKDAY.INTL", "ARBEITSTAG.INTL"),
-        // reviewed: sidebar link (page body left WRAPCOLS) | sources: https://support.microsoft.com/de-de/excel/functions/wrapcols-function
         ("WRAPCOLS", "SPALTENUMBRUCH"),
-        // reviewed: page example =ZEILENUMBRUCH + sidebar | sources: https://support.microsoft.com/de-de/excel/functions/wraprows-function
         ("WRAPROWS", "ZEILENUMBRUCH"),
         ("XIRR", "XINTZINSFUSS"),
         ("XLOOKUP", "XVERWEIS"),
