@@ -60,7 +60,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Data Table…",
             ["Data", "Forecast", "What-If Analysis"],
             None,
-            "{range: \"D2:E10\", rowInput?: \"B1\", columnInput?: \"B2\", static?: bool} → {range, cells, mode, formula, static}. Creates a live data table {=TABLE(rowInput,columnInput)} over the results: one-variable (values down the first column with columnInput, or across the top row with rowInput; formulas along the other edge) or two-variable (formula in the top-left corner). Input cells are on the table's sheet, outside it. The results recalculate with the workbook (in Automatic Except for Data Tables mode, on F9); editing part of them is refused, clearing all of them removes the table. `static: true` instead writes the results once as values (input cells on any sheet). ≤100,000 result cells.",
+            "{range: \"D2:E10\", rowInput?: \"B1\", columnInput?: \"B2\", static?: bool} → {range, cells, mode, formula, static}. Creates a live data table {=TABLE(rowInput,columnInput)} over the results: one-variable (values down the first column with columnInput, or across the top row with rowInput; formulas along the other edge) or two-variable (formula in the top-left corner). Input cells are on the table's sheet, outside it. The results recalculate with the workbook (in Automatic Except for Data Tables mode, on F9); editing part of them is refused, clearing all of them removes the table. `static: true` instead writes the results once as values (input cells on any sheet). ≤100,000 result cells. From the ribbon, Data Table… opens Excel's dialog (Row input cell, Column input cell) over the selection.",
             has_doc,
             data_table
         ),
@@ -1458,8 +1458,80 @@ mod tests {
         s.execute("data.dataTable", json!({"range": "L1:N3", "rowInput": "B1", "columnInput": "B2"})).unwrap();
         assert_eq!(tables(&s).len(), 2);
         assert_eq!(n(&s, "N3"), 60.0);
+        // Show Formulas shows the formula without the braces of the formula bar, as Excel does;
+        // `cell.get` also says which table the cell belongs to.
         s.execute("formulas.showFormulas", json!({"on": true})).unwrap();
-        assert_eq!(s.execute("cell.get", json!({"cell": "M2"})).unwrap()["text"], "{=TABLE(B1,B2)}");
+        let got = s.execute("cell.get", json!({"cell": "M2"})).unwrap();
+        assert_eq!((got["text"].as_str(), got["formula"].as_str()), (Some("=TABLE(B1,B2)"), Some("{=TABLE(B1,B2)}")));
+        assert_eq!(got["dataTable"], json!({"range": "L1:N3", "rowInput": "B1", "columnInput": "B2"}));
+        assert_eq!(s.execute("cell.get", json!({"cell": "L1"})).unwrap()["dataTable"], serde_json::Value::Null, "edges aren't results");
+    }
+
+    /// Editing one input value along an edge recalculates its own results; the others keep
+    /// theirs, and agree with a full recalculation.
+    #[test]
+    fn edge_values_recalculate_their_own_results() {
+        let mut s = s();
+        loan(&mut s);
+        s.execute("data.dataTable", json!({"range": "D2:E5", "columnInput": "B2"})).unwrap();
+        s.execute("cell.set", json!({"cell": "D4", "input": "1000"})).unwrap();
+        assert!((n(&s, "E4") - 1050.0).abs() < 1e-9);
+        assert!((n(&s, "E3") - 105.0).abs() < 1e-9);
+        // An edge value that is a formula over another one follows it.
+        s.execute("cell.set", json!({"cell": "D5", "input": "=D4*2"})).unwrap();
+        assert!((n(&s, "E5") - 2100.0).abs() < 1e-9);
+        s.execute("cell.set", json!({"cell": "D4", "input": "10"})).unwrap();
+        assert!((n(&s, "E5") - 21.0).abs() < 1e-9);
+        let before: Vec<f64> = ["E3", "E4", "E5", "H1"].iter().map(|a| n(&s, a)).collect();
+        s.execute("formulas.calculateNow", json!({})).unwrap();
+        assert_eq!(["E3", "E4", "E5", "H1"].iter().map(|a| n(&s, a)).collect::<Vec<_>>(), before);
+    }
+
+    /// Manual mode: nothing waits for F9 but the tables; switching to Automatic Except for Data
+    /// Tables calculates the formulas edited meanwhile, and F9 the tables.
+    #[test]
+    fn data_tables_in_manual_and_except_tables_modes() {
+        let mut s = s();
+        loan(&mut s);
+        s.execute("data.dataTable", json!({"range": "D2:E5", "columnInput": "B2"})).unwrap();
+        s.execute("formulas.calculationOptions", json!({"mode": "manual"})).unwrap();
+        s.execute("cell.set", json!({"cell": "B1", "input": "0.5"})).unwrap();
+        s.execute("cell.set", json!({"cell": "G1", "input": "=B1*2"})).unwrap();
+        assert!((n(&s, "E4") - 210.0).abs() < 1e-9, "manual mode waits for F9");
+        let r = s.execute("formulas.calculationOptions", json!({"mode": "automaticExceptTables"})).unwrap();
+        assert_eq!(r["mode"], "AutomaticExceptTables");
+        assert_eq!(n(&s, "G1"), 1.0);
+        s.execute("cell.set", json!({"cell": "B1", "input": "1"})).unwrap();
+        assert_eq!(n(&s, "G1"), 2.0, "formulas calculate");
+        let stale = n(&s, "E4");
+        s.execute("cell.set", json!({"cell": "D4", "input": "400"})).unwrap();
+        assert_eq!(n(&s, "E4"), stale, "tables wait for F9");
+        s.execute("formulas.calculateNow", json!({})).unwrap();
+        assert_eq!(n(&s, "E4"), 800.0);
+        // Back to Automatic: tables follow every edit again.
+        s.execute("formulas.calculationOptions", json!({"mode": "automatic"})).unwrap();
+        s.execute("cell.set", json!({"cell": "B1", "input": "0"})).unwrap();
+        assert_eq!(n(&s, "E4"), 400.0);
+    }
+
+    /// Deleting the whole results area (Delete over all of it) removes the table, with undo;
+    /// deleting part of it is refused.
+    #[test]
+    fn deleting_all_results_removes_the_table() {
+        let mut s = s();
+        loan(&mut s);
+        s.execute("data.dataTable", json!({"range": "D2:E5", "columnInput": "B2"})).unwrap();
+        let part = s.execute("edit.clearContents", json!({"range": "E4:E5"}));
+        assert!(matches!(part, Err(crate::EngineError::Other(m)) if m == super::DATA_TABLE_PART));
+        // The whole table with its edges, as Excel allows.
+        s.execute("edit.clearContents", json!({"range": "D2:E5"})).unwrap();
+        assert!(tables(&s).is_empty());
+        assert_eq!(v(&s, "E4"), Value::Empty);
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(tables(&s).len(), 1);
+        assert!((n(&s, "E4") - 210.0).abs() < 1e-9);
+        s.execute("cell.set", json!({"cell": "B1", "input": "0.5"})).unwrap();
+        assert!((n(&s, "E4") - 300.0).abs() < 1e-9, "live again after undo");
     }
 
     #[test]

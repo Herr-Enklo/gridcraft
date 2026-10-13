@@ -82,13 +82,15 @@ pub fn formula_hidden(wb: &Workbook, sheet: &Sheet, c: CellRef) -> bool {
 }
 
 /// The text a cell shows (full precision General; the grid narrows General to fit the column).
+/// With Show Formulas on, a data table's result shows `=TABLE(,B2)`, without the braces the
+/// formula bar adds (as Excel shows it).
 pub fn cell_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
     if sheet.show_formulas && !formula_hidden(wb, sheet, c) {
         if let Some(f) = sheet.cell(c).and_then(|x| x.formula.as_ref()) {
             return format!("={}", f.text);
         }
         if let Some(t) = sheet.data_table_at(c) {
-            return format!("{{={}}}", t.formula_text());
+            return format!("={}", t.formula_text());
         }
     }
     value_text(wb, sheet, c)

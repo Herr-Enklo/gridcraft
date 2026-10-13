@@ -9,7 +9,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(query "document.inspect", "Inspect Workbook", [], None, "{} → sheets, selection, names, tables, charts, dirty, history", has_doc, inspect),
         cmd!(query "sheet.read", "Read Range", [], None, "{range?: \"A1:D10\" (default: used range), sheet?, formulas?: bool, formatted?: bool} → rows of values", has_doc, read),
-        cmd!(query "cell.get", "Get Cell", [], None, "{cell?, sheet?} → value, formula, display text, style, comment, link", has_doc, cell_get),
+        cmd!(query "cell.get", "Get Cell", [], None, "{cell?, sheet?} → value, formula, display text, style, comment, link, dataTable (the What-If data table whose result the cell is)", has_doc, cell_get),
         cmd!(query "selection.stats", "Selection Statistics", [], None, "{} → count, sum, average, min, max", has_doc, sel_stats),
         cmd!(query "history.list", "Undo History", [], None, "{} → undo/redo labels", has_doc, history),
         cmd!(query "app.commands", "List Commands", [], None, "{search?} → ids, labels, params", always, list_commands),
@@ -136,6 +136,11 @@ fn cell_get(s: &mut Session, p: &Json) -> Result<Json> {
         "merge": sh.merge_at(c).map(|m| m.a1()),
         "comment": sh.comments.get(&c),
         "hyperlink": sh.hyperlinks.get(&c),
+        "dataTable": sh.data_table_at(c).map(|t| json!({
+            "range": t.range.a1(),
+            "rowInput": t.row_input.map(|c| c.a1()),
+            "columnInput": t.col_input.map(|c| c.a1()),
+        })),
     }))
 }
 
