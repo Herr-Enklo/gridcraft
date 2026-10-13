@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use gridcraft_core::{CellError, CellRef, Value};
 use serde_json::{Value as Json, json};
 
-use super::access::{DataAccess, FileEntry, HttpRequest, HttpResponse};
+use super::access::{DataAccess, DbTable, FileEntry, HttpRequest, HttpResponse};
 use crate::Session;
 
 /// Files and web responses held in memory.
@@ -57,6 +57,32 @@ impl DataAccess for Fake {
     }
     fn web_available(&self) -> Result<(), String> {
         Ok(())
+    }
+    fn odbc_available(&self) -> Result<(), String> {
+        Ok(())
+    }
+    fn odbc_tables(&self, connection: &str) -> Result<Vec<String>, String> {
+        if connection.contains("Nope") {
+            Err("Couldn't connect to the data source.".into())
+        } else {
+            Ok(vec!["dbo.Orders".into(), "Customers".into()])
+        }
+    }
+    fn odbc_table(&self, _connection: &str, table: &str, max_rows: usize) -> Result<DbTable, String> {
+        if table != "dbo.Orders" {
+            return Err(format!("unexpected table {table}"));
+        }
+        let rows = vec![
+            vec![Value::number(1.0), Value::text("2026-01-05"), Value::number(9.5)],
+            vec![Value::number(2.0), Value::text("2026-02-06"), Value::Empty],
+        ];
+        Ok(DbTable { columns: vec!["Id".into(), "Ordered".into(), "Amount".into()], rows: rows.into_iter().take(max_rows).collect() })
+    }
+    fn odbc_query(&self, _connection: &str, sql: &str, _max_rows: usize) -> Result<DbTable, String> {
+        if !sql.to_ascii_uppercase().starts_with("SELECT") {
+            return Err("The query failed.".into());
+        }
+        Ok(DbTable { columns: vec!["N".into(), "N".into()], rows: vec![vec![Value::number(7.0), Value::text("x")]] })
     }
     fn http_get(&self, req: &HttpRequest) -> Result<HttpResponse, String> {
         self.gets.fetch_add(1, Ordering::SeqCst);
@@ -277,6 +303,14 @@ fn every_transform_step() {
         json!([{"op": "promoteHeaders"}, {"op": "changeType", "locale": "de-DE", "columns": [{"column": "N", "type": "number"}, {"column": "D", "type": "date"}]}]),
     );
     assert_eq!(rows(&p)[0], vec![json!(1234.5), json!(46387.0)]);
+    // Date filters take dates as typed.
+    let dated = "D\n2026-01-05\n2026-02-01\n3/1/2026\n";
+    let p = preview(
+        &mut s,
+        dated,
+        json!([{"op": "promoteHeaders"}, {"op": "changeType", "columns": [{"column": "D", "type": "date"}]}, {"op": "filterRows", "column": "D", "conditions": [{"op": "greaterThan", "value": "2026-01-31"}]}]),
+    );
+    assert_eq!(p["rowCount"], 2);
     // Preview of an earlier step, with its formula.
     let q = json!({"name": "T", "source": {"kind": "text", "text": data}, "steps": base});
     let p = s.execute("query.preview", json!({"query": q, "step": 0})).unwrap();
@@ -492,7 +526,7 @@ fn odata_feed_service_root_and_paging() {
     );
     fake.page("https://svc.example/odata/Products?$skip=1", "application/json", r#"{"value":[{"ID":2,"Name":"Milk"}]}"#);
     let mut s = session(&fake);
-    let nav = s.execute("query.navigator", json!({"source": {"kind": "oData", "url": "https://svc.example/odata"}})).unwrap();
+    let nav = s.execute("query.navigator", json!({"source": {"kind": "odata", "url": "https://svc.example/odata"}})).unwrap();
     assert_eq!(nav["items"][0]["name"], "Products");
     assert!(s.execute("data.fromODataFeed", json!({"url": "https://svc.example/odata"})).is_err());
     let r = s.execute("data.fromODataFeed", json!({"url": "https://svc.example/odata", "item": "Products"})).unwrap();
@@ -539,6 +573,47 @@ fn file_sources_folder_json_xml_and_excel() {
     assert_eq!(r["rows"], 2);
     let d = s.doc().unwrap();
     assert_eq!(d.wb.queries.last().unwrap().steps[0].op, gridcraft_model::StepOp::PromoteHeaders);
+}
+
+#[test]
+fn odbc_sql_server_and_access_sources() {
+    let fake = Arc::new(Fake::default());
+    let mut s = session(&fake);
+    // The Navigator lists the tables; a table is read only when the connection lists it.
+    let nav = s.execute("query.navigator", json!({"source": {"kind": "odbc", "connection": "DSN=Shop"}})).unwrap();
+    assert_eq!(nav["items"][0]["name"], "dbo.Orders");
+    let e = s.execute("data.fromOdbc", json!({"connection": "DSN=Shop"})).unwrap_err().to_string();
+    assert!(e.contains("dbo.Orders"), "{e}");
+    assert!(s.execute("data.fromOdbc", json!({"connection": "DSN=Shop", "table": "x; DROP TABLE y"})).is_err());
+    let r = s.execute("data.fromOdbc", json!({"connection": "DSN=Shop", "table": "dbo.Orders"})).unwrap();
+    assert_eq!(r["query"], "dbo.Orders");
+    // Dates the driver gives as text are dates, typed like Power Query types them.
+    let d = s.doc().unwrap();
+    let q = d.wb.queries.last().unwrap();
+    assert!(q.steps.is_empty(), "typed sources get no Changed Type step");
+    let sheet = r["sheet"].as_str().unwrap().to_string();
+    assert_eq!(cell(&s, &sheet, "B2"), Value::number(46027.0));
+    assert_eq!(cell(&s, &sheet, "C3"), Value::Empty);
+    // A SQL statement; duplicate column names become unique.
+    let r = s.execute("data.fromOdbc", json!({"connection": "DSN=Shop", "sql": "SELECT 7, 'x'", "name": "Sql"})).unwrap();
+    assert_eq!(r["cols"], 2);
+    assert_eq!(cell(&s, "Sql", "B1"), Value::text("N_1"));
+    // SQL Server and Access build their ODBC connection strings.
+    assert_eq!(
+        crate::cmd::query::sql_server_connection("db01;x", Some("Sales")),
+        "Driver={SQL Server};Server={db01;x};Trusted_Connection=Yes;Database=Sales;"
+    );
+    assert_eq!(
+        crate::cmd::query::access_connection("C:\\data\\shop.accdb"),
+        "Driver={Microsoft Access Driver (*.mdb, *.accdb)};Dbq=C:\\data\\shop.accdb;"
+    );
+    let r = s.execute("data.fromSqlServer", json!({"server": "db01", "database": "Sales", "table": "dbo.Orders"})).unwrap();
+    assert_eq!(r["rows"], 2);
+    let r = s.execute("data.fromAccess", json!({"path": "C:/data/shop.accdb", "sql": "SELECT 1"})).unwrap();
+    assert_eq!(r["query"], "shop");
+    assert!(s.execute("data.fromOdbc", json!({"connection": "DSN=Nope", "table": "t"})).unwrap_err().to_string().contains("connect"));
+    // Connection strings may hold credentials: they aren't kept in Recent Sources.
+    assert!(!s.prefs.recent_sources.iter().any(|r| r.contains("DSN")));
 }
 
 /// A workbook saved with an external query and a WEBSERVICE formula, as bytes.

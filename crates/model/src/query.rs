@@ -108,6 +108,7 @@ pub enum QuerySource {
         item: Option<String>,
     },
     /// From OData Feed: the JSON feed at `url`; at a service root, `item` names the entity set.
+    #[serde(rename = "odata")]
     OData {
         url: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]

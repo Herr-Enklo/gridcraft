@@ -953,18 +953,30 @@ fn conn_value(v: &str) -> String {
     if v.contains([';', '{', '}', '=']) { format!("{{{}}}", v.replace('}', "}}")) } else { v.to_string() }
 }
 
-fn from_sql_server(s: &mut Session, p: &Json) -> Result<Json> {
-    let server = str_param(p, "server").ok_or_else(|| bad("data.fromSqlServer", "missing `server`"))?;
+/// The ODBC connection string From SQL Server Database uses: the SQL Server driver Windows ships,
+/// Windows authentication.
+pub fn sql_server_connection(server: &str, database: Option<&str>) -> String {
     let mut conn = format!("Driver={{SQL Server}};Server={};Trusted_Connection=Yes;", conn_value(server));
-    if let Some(db) = str_param(p, "database") {
+    if let Some(db) = database.filter(|d| !d.trim().is_empty()) {
         conn.push_str(&format!("Database={};", conn_value(db)));
     }
+    conn
+}
+
+/// The ODBC connection string From Microsoft Access Database uses.
+pub fn access_connection(path: &str) -> String {
+    format!("Driver={{Microsoft Access Driver (*.mdb, *.accdb)}};Dbq={};", conn_value(path))
+}
+
+fn from_sql_server(s: &mut Session, p: &Json) -> Result<Json> {
+    let server = str_param(p, "server").ok_or_else(|| bad("data.fromSqlServer", "missing `server`"))?;
+    let conn = sql_server_connection(server, str_param(p, "database"));
     odbc_source(s, p, conn, "Query1")
 }
 
 fn from_access(s: &mut Session, p: &Json) -> Result<Json> {
     let path = str_param(p, "path").ok_or_else(|| bad("data.fromAccess", "missing `path`"))?;
-    let conn = format!("Driver={{Microsoft Access Driver (*.mdb, *.accdb)}};Dbq={};", conn_value(path));
+    let conn = access_connection(path);
     odbc_source(s, p, conn, &stem(path))
 }
 

@@ -125,7 +125,7 @@ pub fn apply(cx: &mut EvalCx<'_>, t: QTable, op: &StepOp) -> QResult<QTable> {
             let mut t = t;
             t.rows.retain(|row| {
                 let v = row.get(i).unwrap_or(&Value::Empty);
-                let in_list = values.as_ref().is_none_or(|list| list.iter().any(|l| equals(v, l.as_ref())));
+                let in_list = values.as_ref().is_none_or(|list| list.iter().any(|l| equals(v, l.as_ref(), sys)));
                 let conds = conditions.is_empty()
                     || if *or { conditions.iter().any(|c| holds(v, c, sys)) } else { conditions.iter().all(|c| holds(v, c, sys)) };
                 in_list && conds
@@ -139,7 +139,7 @@ pub fn apply(cx: &mut EvalCx<'_>, t: QTable, op: &StepOp) -> QResult<QTable> {
             for row in t.rows.iter_mut() {
                 for &i in &idx {
                     if let Some(v) = row.get_mut(i) {
-                        *v = replaced(v, find.as_ref(), replace.as_ref(), *whole);
+                        *v = replaced(v, find.as_ref(), replace.as_ref(), *whole, sys);
                     }
                 }
             }
@@ -243,10 +243,17 @@ fn literal_value(l: Option<&Literal>) -> Value {
     }
 }
 
-/// The literal in the value's own kind where it can be (`"5"` against a number is 5).
-fn literal_like(v: &Value, l: Option<&Literal>) -> Value {
+/// The literal in the value's own kind where it can be (`"5"` against a number is 5, and a date
+/// typed as `2026-01-31` or `1/31/2026` against a date serial is that serial).
+fn literal_like(v: &Value, l: Option<&Literal>, sys: gridcraft_core::DateSystem) -> Value {
     match (v, l) {
-        (Value::Number(_), Some(Literal::Text(t))) => t.trim().parse::<f64>().ok().map(Value::number).unwrap_or_else(|| Value::text(t.as_str())),
+        (Value::Number(_), Some(Literal::Text(t))) => t
+            .trim()
+            .parse::<f64>()
+            .ok()
+            .or_else(|| super::types::parse_datetime(t.trim(), &super::types::Culture::of(None), sys).map(|(n, _)| n))
+            .map(Value::number)
+            .unwrap_or_else(|| Value::text(t.as_str())),
         (Value::Text(_), Some(Literal::Number(n))) => Value::text(gridcraft_core::number_to_text(*n)),
         (Value::Bool(_), Some(Literal::Text(t))) if t.eq_ignore_ascii_case("true") || t.eq_ignore_ascii_case("false") => {
             Value::Bool(t.eq_ignore_ascii_case("true"))
@@ -256,11 +263,11 @@ fn literal_like(v: &Value, l: Option<&Literal>) -> Value {
 }
 
 /// Equality for filters and replacements; null also matches empty text (the "(blank)" item).
-fn equals(v: &Value, l: Option<&Literal>) -> bool {
+fn equals(v: &Value, l: Option<&Literal>, sys: gridcraft_core::DateSystem) -> bool {
     if l.is_none() {
         return matches!(v, Value::Empty) || v.as_text().is_some_and(str::is_empty);
     }
-    key(Some(v)) == key(Some(&literal_like(v, l)))
+    key(Some(v)) == key(Some(&literal_like(v, l, sys)))
 }
 
 /// Whether `v` meets a filter condition. Comparisons with null fail, as in Power Query.
@@ -268,7 +275,7 @@ pub fn holds(v: &Value, c: &FilterCondition, sys: gridcraft_core::DateSystem) ->
     test(v, c.op, c.value.as_ref(), sys)
 }
 
-fn test(v: &Value, op: FilterOp, lit: Option<&Literal>, _sys: gridcraft_core::DateSystem) -> bool {
+fn test(v: &Value, op: FilterOp, lit: Option<&Literal>, sys: gridcraft_core::DateSystem) -> bool {
     let text = |v: &Value| match v {
         Value::Text(t) => Some(t.to_string()),
         Value::Number(n) => Some(gridcraft_core::number_to_text(*n)),
@@ -283,8 +290,8 @@ fn test(v: &Value, op: FilterOp, lit: Option<&Literal>, _sys: gridcraft_core::Da
     match op {
         FilterOp::IsNull => matches!(v, Value::Empty),
         FilterOp::IsNotNull => !matches!(v, Value::Empty),
-        FilterOp::Equals => equals(v, lit),
-        FilterOp::NotEquals => !equals(v, lit),
+        FilterOp::Equals => equals(v, lit, sys),
+        FilterOp::NotEquals => !equals(v, lit, sys),
         FilterOp::BeginsWith => text(v).is_some_and(|t| t.starts_with(&lit_text())),
         FilterOp::NotBeginsWith => text(v).is_some_and(|t| !t.starts_with(&lit_text())),
         FilterOp::EndsWith => text(v).is_some_and(|t| t.ends_with(&lit_text())),
@@ -292,7 +299,7 @@ fn test(v: &Value, op: FilterOp, lit: Option<&Literal>, _sys: gridcraft_core::Da
         FilterOp::Contains => text(v).is_some_and(|t| t.contains(&lit_text())),
         FilterOp::NotContains => text(v).is_some_and(|t| !t.contains(&lit_text())),
         FilterOp::GreaterThan | FilterOp::GreaterOrEqual | FilterOp::LessThan | FilterOp::LessOrEqual => {
-            let other = literal_like(v, lit);
+            let other = literal_like(v, lit, sys);
             if matches!(v, Value::Empty | Value::Error(_)) || matches!(other, Value::Empty) {
                 return false;
             }
@@ -312,7 +319,7 @@ fn test(v: &Value, op: FilterOp, lit: Option<&Literal>, _sys: gridcraft_core::Da
     }
 }
 
-fn replaced(v: &Value, find: Option<&Literal>, replace: Option<&Literal>, whole: bool) -> Value {
+fn replaced(v: &Value, find: Option<&Literal>, replace: Option<&Literal>, whole: bool, sys: gridcraft_core::DateSystem) -> Value {
     match (v, find) {
         (Value::Text(s), Some(Literal::Text(f))) if !whole && !f.is_empty() => {
             let r = match replace {
@@ -328,7 +335,7 @@ fn replaced(v: &Value, find: Option<&Literal>, replace: Option<&Literal>, whole:
                 v.clone()
             }
         }
-        _ if equals(v, find) => literal_value(replace),
+        _ if equals(v, find, sys) => literal_value(replace),
         _ => v.clone(),
     }
 }
