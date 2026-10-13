@@ -427,8 +427,9 @@ impl KeptReader {
                         let _ = write!(x, "<externalReference r:id=\"{}\"/>", esc_attr(id));
                     }
                     x.push_str("</externalReferences>");
+                    // No open warning: links are a feature (Data › Workbook Links), and the app says
+                    // that their automatic update is disabled on open, as Excel does.
                     p.elements.push(PreservedXml { slot: "externalReferences".into(), xml: x });
-                    cx.warn("links to external workbooks were kept; they are not followed or refreshed (formulas use the values saved with them)");
                 }
                 Err(why) => cx.warn(format!("links to external workbooks were dropped: {why}")),
             }

@@ -22,6 +22,7 @@ pub mod i18n;
 pub mod icons;
 pub mod keymap;
 pub mod keytips;
+pub mod message_bar;
 pub mod outline;
 pub mod panes;
 pub mod paper_view;
@@ -33,6 +34,7 @@ pub mod tabs;
 pub mod text_box;
 pub mod theme;
 pub mod widgets;
+pub mod workbook_links;
 
 use std::collections::HashMap;
 
@@ -1115,6 +1117,7 @@ impl SheetApp {
         } else {
             ribbon::show(self, ui);
             widgets::notice_bar(self, ui);
+            message_bar::show(self, ui);
             if self.session.prefs.formula_bar {
                 formula_bar::show(self, ui);
             }
