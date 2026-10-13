@@ -118,6 +118,9 @@ fn group_by_name(g: PivotDateGroup) -> &'static str {
         PivotDateGroup::Quarters => "quarters",
         PivotDateGroup::Months => "months",
         PivotDateGroup::Days => "days",
+        PivotDateGroup::Hours => "hours",
+        PivotDateGroup::Minutes => "minutes",
+        PivotDateGroup::Seconds => "seconds",
         PivotDateGroup::None => "range",
     }
 }
@@ -128,8 +131,18 @@ fn group_caption(g: PivotDateGroup) -> &'static str {
         PivotDateGroup::Quarters => "Quarters",
         PivotDateGroup::Months => "Months",
         PivotDateGroup::Days => "Days",
+        PivotDateGroup::Hours => "Hours",
+        PivotDateGroup::Minutes => "Minutes",
+        PivotDateGroup::Seconds => "Seconds",
         PivotDateGroup::None => "Group",
     }
+}
+
+/// An hour as Excel's Hours grouping shows it: `12 AM`, `1 AM` … `11 PM`.
+fn hour_caption(h: u32) -> String {
+    let h = h % 24;
+    let twelve = if h.is_multiple_of(12) { 12 } else { h % 12 };
+    format!("{twelve} {}", if h < 12 { "AM" } else { "PM" })
 }
 
 /// `2024-03-05T00:00:00` for a date serial.
@@ -502,13 +515,7 @@ fn build_cache(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<Cac
             None => groupings.push((b, vec![pf.date_group])),
         }
     }
-    let fineness = |g: &PivotDateGroup| match g {
-        PivotDateGroup::Days => 0,
-        PivotDateGroup::Months => 1,
-        PivotDateGroup::Quarters => 2,
-        PivotDateGroup::Years => 3,
-        PivotDateGroup::None => 4,
-    };
+    let fineness = |g: &PivotDateGroup| g.fineness().unwrap_or(PivotDateGroup::LEVELS.len());
     for (b, list) in groupings.iter_mut() {
         list.sort_by_key(fineness);
         let (min, max) = fields.get(*b).map(|f| (f.stats.min, f.stats.max)).unwrap_or((0.0, 0.0));
@@ -668,6 +675,8 @@ fn group_items(sys: DateSystem, by: PivotDateGroup, start: f64, end: f64) -> Vec
         }
         PivotDateGroup::Quarters => v.extend((1..=4).map(|q| format!("Qtr{q}"))),
         PivotDateGroup::Months => v.extend(MONTHS.iter().map(|m| m.to_string())),
+        PivotDateGroup::Hours => v.extend((0..24).map(hour_caption)),
+        PivotDateGroup::Minutes | PivotDateGroup::Seconds => v.extend((0..60).map(|m| format!(":{m:02}"))),
         PivotDateGroup::Days | PivotDateGroup::None => {
             const DAYS: [u32; 12] = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
             for (m, n) in MONTHS.iter().zip(DAYS) {
@@ -1490,7 +1499,7 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32) -> Option<Pivo
             let i = i as usize;
             let Some((name, group, number_group)) = field_ref(cx, cache, i) else { continue };
             let labels = cache.fields.get(i).map(|f| f.labels().to_vec()).unwrap_or_default();
-            let mut f = PivotField { source_col: name.clone(), date_group: group, number_group, sort: PivotSort::None, collapsed_items: vec![] };
+            let mut f = PivotField { source_col: name.clone(), date_group: group, number_group, sort: PivotSort::None, ..PivotField::default() };
             if let Some(e) = pf(i) {
                 f.sort = match e.attr("sortType") {
                     Some("ascending") => PivotSort::Asc,

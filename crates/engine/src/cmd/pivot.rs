@@ -151,7 +151,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Group Field",
             ["PivotTable Analyze", "Group"],
             None,
-            "{pivot?, field, by: years|quarters|months|days|range|none, start?, end?, interval? (by: range; default the smallest and largest numbers, and 10), replace?}",
+            "{pivot?, field, by: years|quarters|months|days|hours|minutes|seconds|range|none | [levels] (several date and time levels make one field each, coarsest first), start?, end?: number or date (Starting at / Ending at; default automatic), interval? (by: range; default 10), days?: 1 (Number of days; by: days only), replace?}; without `field` and `by` opens the Grouping dialog for the field at the active cell",
             has_doc,
             group
         ),
@@ -241,14 +241,14 @@ fn with(p: &Json, k: &str, v: Json) -> Json {
     Json::Object(m)
 }
 
-fn other(msg: impl Into<String>) -> EngineError {
+pub(super) fn other(msg: impl Into<String>) -> EngineError {
     EngineError::Other(msg.into())
 }
 
 // ---------------------------------------------------------------- lookup
 
 /// (sheet, index) of the pivot a call targets.
-fn find_pivot(s: &Session, p: &Json) -> Result<(usize, usize)> {
+pub(super) fn find_pivot(s: &Session, p: &Json) -> Result<(usize, usize)> {
     let d = s.doc()?;
     let active = d.wb.active_sheet;
     if let Some(v) = p.get("pivot").filter(|v| !v.is_null()) {
@@ -368,6 +368,9 @@ fn group_name(g: PivotDateGroup) -> &'static str {
         PivotDateGroup::Quarters => "quarters",
         PivotDateGroup::Months => "months",
         PivotDateGroup::Days => "days",
+        PivotDateGroup::Hours => "hours",
+        PivotDateGroup::Minutes => "minutes",
+        PivotDateGroup::Seconds => "seconds",
     }
 }
 
@@ -375,7 +378,8 @@ fn group_name(g: PivotDateGroup) -> &'static str {
 fn axis_json(f: &PivotField) -> Json {
     let group = if f.number_group.is_some() { "range" } else { group_name(f.date_group) };
     let range = f.number_group.map(|g| json!({"start": g.start, "end": g.end, "interval": g.by}));
-    json!({"field": f.source_col, "sort": sort_name(f.sort), "group": group, "range": range, "collapsed": f.collapsed_items})
+    let dates = f.date_range.map(|r| json!({"start": r.start, "end": r.end, "days": r.days}));
+    json!({"field": f.source_col, "sort": sort_name(f.sort), "group": group, "range": range, "dates": dates, "collapsed": f.collapsed_items})
 }
 
 fn sort_name(o: PivotSort) -> &'static str {
@@ -388,7 +392,7 @@ fn sort_name(o: PivotSort) -> &'static str {
 
 // ---------------------------------------------------------------- layout editing (pure)
 
-fn in_axes(pt: &PivotTable, field: &str) -> bool {
+pub(super) fn in_axes(pt: &PivotTable, field: &str) -> bool {
     pt.rows.iter().chain(pt.columns.iter()).any(|f| f.source_col.eq_ignore_ascii_case(field))
 }
 
@@ -419,7 +423,7 @@ fn shift_values(pt: &mut PivotTable, rows: bool, i: usize, inserted: bool) {
 }
 
 /// Takes `field` out of Rows and Columns (Σ Values keeps its place); returns its first entry.
-fn take_from_axes(pt: &mut PivotTable, field: &str) -> Option<PivotField> {
+pub(super) fn take_from_axes(pt: &mut PivotTable, field: &str) -> Option<PivotField> {
     let mut first = None;
     for rows in [true, false] {
         loop {
@@ -434,7 +438,7 @@ fn take_from_axes(pt: &mut PivotTable, field: &str) -> Option<PivotField> {
 }
 
 /// Inserts `f` into Rows (`rows`) or Columns at `position` (default: the end).
-fn insert_axis_field(pt: &mut PivotTable, rows: bool, f: PivotField, position: Option<usize>) {
+pub(super) fn insert_axis_field(pt: &mut PivotTable, rows: bool, f: PivotField, position: Option<usize>) {
     let list = if rows { &mut pt.rows } else { &mut pt.columns };
     let at = position.unwrap_or(list.len()).min(list.len());
     list.insert(at, f);
@@ -467,12 +471,17 @@ fn calc_field<'a>(pt: &'a PivotTable, field: &str) -> Option<&'a PivotCalcField>
     pt.calculated_fields.iter().find(|c| c.name.eq_ignore_ascii_case(field.trim()))
 }
 
-/// The canonical name of a source or calculated field.
+/// The canonical name of a source, calculated or grouped (Group Selection) field.
 fn canonical_any(cmd: &str, pt: &PivotTable, src: &pv::Source, field: &str) -> Result<String> {
-    match calc_field(pt, field) {
-        Some(c) if src.col(field).is_none() => Ok(c.name.clone()),
-        _ => canonical(cmd, src, field),
+    if src.col(field).is_none() {
+        if let Some(c) = calc_field(pt, field) {
+            return Ok(c.name.clone());
+        }
+        if let Some(g) = pt.group_field(field) {
+            return Ok(g.name.clone());
+        }
     }
+    canonical(cmd, src, field)
 }
 
 fn unique_value_name(pt: &PivotTable, base: &str, except: Option<usize>) -> String {
@@ -502,7 +511,13 @@ fn add_to_area(
     if is_calc && area != "values" {
         return Err(other("A calculated field can only be placed in the Values area."));
     }
+    if src.col(field).is_none() && pt.group_field(field).is_some() && area == "values" {
+        return Err(other("A field made by Group Selection can't be placed in the Values area."));
+    }
     let field = canonical_any(cmd, pt, src, field)?;
+    if matches!(area, "values" | "filters") && pt.calculated_items.iter().any(|c| c.field.eq_ignore_ascii_case(&field)) {
+        return Err(other(super::pivot_tools::CALC_ITEM_AREA));
+    }
     match area {
         "rows" | "columns" => {
             if pt.rows.len() + pt.columns.len() >= pv::MAX_AXIS_FIELDS && !in_axes(pt, &field) {
@@ -520,6 +535,14 @@ fn add_to_area(
             }
             let numeric = is_calc || src.col(&field).and_then(|c| src.numeric.get(c).copied()).unwrap_or(false);
             let f = func.unwrap_or(if numeric { PivotFunc::Sum } else { PivotFunc::Count });
+            if !pt.calculated_items.is_empty() {
+                if super::pivot_tools::averages(f) {
+                    return Err(other(super::pivot_tools::NO_AVERAGES));
+                }
+                if pt.values.iter().any(|v| v.source_col.eq_ignore_ascii_case(&field)) {
+                    return Err(other(super::pivot_tools::NO_DUPLICATE_VALUES));
+                }
+            }
             let base = match name {
                 Some(n) if !n.trim().is_empty() => {
                     if src.col(n).is_some() {
@@ -589,7 +612,7 @@ fn remove_from_area(cmd: &str, pt: &mut PivotTable, field: &str, area: &str) -> 
 // ---------------------------------------------------------------- shared update
 
 /// Applies `f` to the targeted pivot and re-renders it, as one undo step.
-fn update(s: &mut Session, p: &Json, f: impl FnOnce(&mut PivotTable, &pv::Source, &Workbook) -> Result<Json>) -> Result<Json> {
+pub(super) fn update(s: &mut Session, p: &Json, f: impl FnOnce(&mut PivotTable, &pv::Source, &Workbook) -> Result<Json>) -> Result<Json> {
     let (si, pi) = find_pivot(s, p)?;
     let replace = bool_param(p, "replace").unwrap_or(false);
     edit(s, |cx| {
@@ -819,6 +842,8 @@ fn pivot_json(wb: &Workbook, si: usize, pt: &PivotTable) -> Json {
         "calculatedFields": pt.calculated_fields.iter().map(|c| json!({"name": c.name, "formula": c.formula})).collect::<Vec<_>>(),
         "valuesOnRows": pt.values_on_rows,
         "valuesPosition": pt.values_position,
+        "groupFields": pt.group_fields.iter().map(|g| json!({"name": g.name, "base": g.base, "groups": g.groups.iter().map(|x| json!({"name": x.name, "items": x.items})).collect::<Vec<_>>()})).collect::<Vec<_>>(),
+        "calculatedItems": pt.calculated_items.iter().map(|c| json!({"field": c.field, "name": c.name, "formula": c.formula})).collect::<Vec<_>>(),
     })
 }
 
@@ -862,6 +887,19 @@ fn fields(s: &mut Session, p: &Json) -> Result<Json> {
     for c in &pt.calculated_fields {
         let areas: Vec<&str> = if pt.values.iter().any(|v| v.source_col.eq_ignore_ascii_case(&c.name)) { vec!["values"] } else { vec![] };
         list.push(json!({"name": c.name, "numeric": true, "date": false, "samples": [], "areas": areas, "calculated": true, "formula": c.formula}));
+    }
+    for g in &pt.group_fields {
+        let mut areas = vec![];
+        for (key, area) in [("rows", &pt.rows), ("columns", &pt.columns)] {
+            if area.iter().any(|f| f.source_col.eq_ignore_ascii_case(&g.name)) {
+                areas.push(key);
+            }
+        }
+        if pt.filters.iter().any(|f| f.source_col.eq_ignore_ascii_case(&g.name)) && !in_axes(pt, &g.name) {
+            areas.push("filters");
+        }
+        let samples: Vec<&str> = g.groups.iter().take(5).map(|x| x.name.as_str()).collect();
+        list.push(json!({"name": g.name, "numeric": false, "date": false, "samples": samples, "areas": areas, "grouped": true, "base": g.base}));
     }
     if let Some(m) = out.as_object_mut() {
         m.insert("fields".into(), Json::Array(list));
@@ -1105,6 +1143,9 @@ fn value_settings(s: &mut Session, p: &Json) -> Result<Json> {
         let cur = pt.values.get(i).cloned().ok_or_else(|| bad(C, "no value field at that index"))?;
         let mut v = cur.clone();
         if let Some(f) = func {
+            if super::pivot_tools::averages(f) && !pt.calculated_items.is_empty() {
+                return Err(other(super::pivot_tools::NO_AVERAGES));
+            }
             v.func = f;
             // An automatic caption follows the function.
             let auto = auto_name(cur.func, &cur.source_col);
@@ -1187,7 +1228,7 @@ fn filter(s: &mut Session, p: &Json) -> Result<Json> {
         Some(_) => return Err(bad(C, "`selected` is a list of item labels or null")),
     };
     update(s, p, |pt, src, _| {
-        let field = canonical(C, src, &field)?;
+        let field = canonical_any(C, pt, src, &field)?;
         let i = pt.filters.iter().position(|f| f.source_col.eq_ignore_ascii_case(&field));
         match (i, selected) {
             (Some(i), None) => {
@@ -1431,63 +1472,198 @@ fn sort(s: &mut Session, p: &Json) -> Result<Json> {
 }
 
 fn group_param(v: Option<&str>) -> Option<PivotDateGroup> {
-    Some(match v?.to_ascii_lowercase().as_str() {
+    Some(match v?.trim().to_ascii_lowercase().as_str() {
         "years" | "year" => PivotDateGroup::Years,
         "quarters" | "quarter" => PivotDateGroup::Quarters,
         "months" | "month" => PivotDateGroup::Months,
         "days" | "day" => PivotDateGroup::Days,
+        "hours" | "hour" => PivotDateGroup::Hours,
+        "minutes" | "minute" => PivotDateGroup::Minutes,
+        "seconds" | "second" => PivotDateGroup::Seconds,
         "none" | "ungroup" => PivotDateGroup::None,
         _ => return None,
     })
 }
 
-fn group(s: &mut Session, p: &Json) -> Result<Json> {
-    const C: &str = "pivot.group";
-    let field = str_param(p, "field").ok_or_else(|| bad(C, "missing `field`"))?.to_string();
-    let raw = str_param(p, "by").unwrap_or("months");
-    let range = raw.eq_ignore_ascii_case("range");
-    let by = if range {
-        PivotDateGroup::None
+/// Sets the grouping of every Rows or Columns entry of `field` on the axis it is first on: date
+/// and time `levels` (one entry per level, coarsest first, at the first entry's place), a number
+/// range grouping, or none (no levels and no number). The field's item selections and label
+/// filters no longer apply and go.
+pub(super) fn set_grouping(
+    pt: &mut PivotTable,
+    field: &str,
+    levels: &[PivotDateGroup],
+    number: Option<PivotNumberGroup>,
+    range: Option<PivotDateRange>,
+) -> Result<()> {
+    let rows = pt.rows.iter().any(|f| f.source_col.eq_ignore_ascii_case(field));
+    let list = if rows { &pt.rows } else { &pt.columns };
+    let at = list
+        .iter()
+        .position(|f| f.source_col.eq_ignore_ascii_case(field))
+        .ok_or_else(|| bad("pivot.group", format!("`{field}` isn't in the rows or columns area")))?;
+    let base = list.get(at).cloned().unwrap_or_default();
+    loop {
+        let list = if rows { &mut pt.rows } else { &mut pt.columns };
+        let Some(i) = list.iter().position(|f| f.source_col.eq_ignore_ascii_case(field)) else { break };
+        list.remove(i);
+        shift_values(pt, rows, i, false);
+    }
+    let mut levels: Vec<PivotDateGroup> = levels.iter().copied().filter(|g| *g != PivotDateGroup::None).collect();
+    levels.sort_by_key(|g| std::cmp::Reverse(g.fineness()));
+    levels.dedup();
+    let plain = PivotField { date_group: PivotDateGroup::None, number_group: None, date_range: None, collapsed_items: vec![], ..base };
+    let entries: Vec<PivotField> = if levels.is_empty() {
+        vec![PivotField { number_group: number, ..plain }]
     } else {
-        group_param(Some(raw)).ok_or_else(|| bad(C, format!("unknown grouping `{raw}` (years|quarters|months|days|range|none)")))?
+        levels.iter().map(|g| PivotField { date_group: *g, date_range: range, ..plain.clone() }).collect()
     };
-    let number = |key: &str| -> Result<Option<f64>> {
-        match p.get(key) {
-            None | Some(Json::Null) => Ok(None),
-            Some(v) => v.as_f64().filter(|x| x.is_finite()).map(Some).ok_or_else(|| bad(C, format!("`{key}` must be a number"))),
+    for (k, e) in entries.into_iter().enumerate() {
+        insert_axis_field(pt, rows, e, Some(at + k));
+    }
+    for x in pt.filters.iter_mut().filter(|x| x.source_col.eq_ignore_ascii_case(field)) {
+        x.selected = None;
+        if matches!(x.rule, Some(PivotRule::Label { .. })) {
+            x.rule = None;
         }
+    }
+    Ok(())
+}
+
+/// A number or date parameter (`"1/1/2026"`, `"2026-01-01"` or a serial).
+fn date_or_number(cmd: &str, p: &Json, key: &str, sys: gridcraft_core::DateSystem) -> Result<Option<f64>> {
+    match p.get(key) {
+        None | Some(Json::Null) => Ok(None),
+        Some(Json::String(t)) if !t.trim().is_empty() => match gridcraft_core::parse::parse_input(t.trim(), sys).value {
+            gridcraft_core::Value::Number(n) if n.is_finite() => Ok(Some(n)),
+            _ => Err(bad(cmd, format!("`{key}` must be a number or a date"))),
+        },
+        Some(v) => v.as_f64().filter(|x| x.is_finite()).map(Some).ok_or_else(|| bad(cmd, format!("`{key}` must be a number or a date"))),
+    }
+}
+
+/// The smallest and largest number of source column `c` (infinite when it has none).
+fn number_bounds(src: &pv::Source, c: usize) -> (f64, f64) {
+    src.rows
+        .iter()
+        .filter_map(|r| match r.get(c) {
+            Some(gridcraft_core::Value::Number(n)) => Some(*n),
+            _ => None,
+        })
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), n| (lo.min(n), hi.max(n)))
+}
+
+/// The Grouping dialog for the field at the active cell (Group Field without parameters).
+fn grouping_dialog(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "pivot.group";
+    let (si, pi) = find_pivot(s, p)?;
+    let field = match str_param(p, "field") {
+        Some(f) => f.trim().to_string(),
+        None => super::pivot_tools::active_item(s, si, pi)
+            .map(|(f, _)| f)
+            .ok_or_else(|| EngineError::Disabled(C.into(), "select an item of a row or column field to group".into()))?,
     };
-    let (start, end, interval) = (number("start")?, number("end")?, number("interval")?);
+    let d = s.doc()?;
+    let pt = d.wb.sheet(si).and_then(|sh| sh.pivots.get(pi)).ok_or_else(|| other("There's no such PivotTable."))?;
+    let src = pv::read_source(&d.wb, &pt.source, si).map_err(other)?;
+    let c = src.col(&field).filter(|c| src.numeric.get(*c).copied().unwrap_or(false)).ok_or_else(|| other(super::pivot_tools::CANNOT_GROUP))?;
+    let (lo, hi) = number_bounds(&src, c);
+    let entries: Vec<&PivotField> = pt.rows.iter().chain(pt.columns.iter()).filter(|f| f.source_col.eq_ignore_ascii_case(&field)).collect();
+    let date = src.dates.get(c).copied().unwrap_or(false) || entries.iter().any(|f| f.date_group != PivotDateGroup::None);
+    let mut levels: Vec<&str> = entries.iter().filter(|f| f.date_group != PivotDateGroup::None).map(|f| group_name(f.date_group)).collect();
+    if levels.is_empty() && date {
+        levels.push("months");
+    }
+    let range = entries.iter().find_map(|f| f.date_range);
+    let number = entries.iter().find_map(|f| f.number_group);
+    let pivot = pt.name.clone();
+    let params = if date {
+        json!({
+            "pivot": pivot, "field": field, "kind": "date", "levels": levels,
+            "start": range.and_then(|r| r.start).unwrap_or(lo.floor()), "end": range.and_then(|r| r.end).unwrap_or(hi.floor() + 1.0),
+            "autoStart": range.is_none_or(|r| r.start.is_none()), "autoEnd": range.is_none_or(|r| r.end.is_none()),
+            "days": range.map_or(1, |r| r.days),
+        })
+    } else {
+        json!({
+            "pivot": pivot, "field": field, "kind": "number",
+            "start": number.map_or(lo, |g| g.start), "end": number.map_or(hi, |g| g.end), "interval": number.map_or(10.0, |g| g.by),
+            "autoStart": number.is_none(), "autoEnd": number.is_none(),
+        })
+    };
+    s.ui_requests.push(crate::UiRequest::Dialog("pivotGrouping".into(), params));
+    ok()
+}
+
+pub(super) fn group(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "pivot.group";
+    if p.get("by").is_none() && p.get("levels").is_none() {
+        return grouping_dialog(s, p);
+    }
+    let field = str_param(p, "field").ok_or_else(|| bad(C, "missing `field`"))?.trim().to_string();
+    // `by`: one level name, `range`, `none`, or a list of date and time levels.
+    let raw: Vec<String> = match p.get("by").or_else(|| p.get("levels")) {
+        Some(Json::String(b)) => vec![b.clone()],
+        Some(Json::Array(a)) => a.iter().take(16).map(|x| x.as_str().unwrap_or("?").to_string()).collect(),
+        _ => return Err(bad(C, "`by` is years|quarters|months|days|hours|minutes|seconds|range|none or a list of levels")),
+    };
+    let range = raw.iter().any(|b| b.trim().eq_ignore_ascii_case("range"));
+    let mut levels: Vec<PivotDateGroup> = Vec::new();
+    if !range {
+        for b in &raw {
+            levels.push(
+                group_param(Some(b))
+                    .ok_or_else(|| bad(C, format!("unknown grouping `{b}` (years|quarters|months|days|hours|minutes|seconds|range|none)")))?,
+            );
+        }
+        levels.retain(|g| *g != PivotDateGroup::None);
+    } else if raw.len() > 1 {
+        return Err(bad(C, "`range` can't be combined with date levels"));
+    }
+    let sys = s.doc()?.wb.date_system;
+    let (start, end) = (date_or_number(C, p, "start", sys)?, date_or_number(C, p, "end", sys)?);
+    let interval = match p.get("interval") {
+        None | Some(Json::Null) => None,
+        Some(v) => Some(v.as_f64().filter(|x| x.is_finite()).ok_or_else(|| bad(C, "`interval` must be a number"))?),
+    };
+    let days = match p.get("days") {
+        None | Some(Json::Null) => 1,
+        Some(v) => v
+            .as_u64()
+            .filter(|d| (1..=u64::from(PivotDateRange::MAX_DAYS)).contains(d))
+            .ok_or_else(|| bad(C, "`days` is a whole number from 1 to 32767"))? as u32,
+    };
+    if days > 1 && levels != [PivotDateGroup::Days] {
+        return Err(other("Number of days applies only when grouping by Days alone."));
+    }
     update(s, p, |pt, src, _| {
-        let mut ranges = None;
-        if range || by != PivotDateGroup::None {
-            let c = src.col(&field).ok_or_else(|| bad(C, format!("no field `{field}` in the source data")))?;
+        let grouping = range || !levels.is_empty();
+        if grouping {
+            if !pt.calculated_items.is_empty() {
+                return Err(other(super::pivot_tools::GROUP_WITH_CALC_ITEMS));
+            }
+            let c = src.col(&field).ok_or_else(|| other(super::pivot_tools::CANNOT_GROUP))?;
             if !src.numeric.get(c).copied().unwrap_or(false) {
-                return Err(other("Cannot group that selection."));
+                return Err(other(super::pivot_tools::CANNOT_GROUP));
             }
             if range {
                 // Excel's defaults: from the smallest to the largest number, in tens.
-                let (lo, hi) = src
-                    .rows
-                    .iter()
-                    .filter_map(|r| r.get(c).and_then(|v| if let gridcraft_core::Value::Number(n) = v { Some(*n) } else { None }))
-                    .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), n| (lo.min(n), hi.max(n)));
+                let (lo, hi) = number_bounds(src, c);
                 let g = PivotNumberGroup::checked(start.unwrap_or(lo), end.unwrap_or(hi), interval.unwrap_or(10.0)).ok_or_else(|| {
                     other("Enter a starting number no greater than the ending number and a positive By value (at most 100,000 groups).")
                 })?;
-                ranges = Some(g);
+                set_grouping(pt, &field, &[], Some(g), None)?;
+                return Ok(json!({}));
             }
-        }
-        let f = axis_field(C, pt, &field)?;
-        f.date_group = by;
-        f.number_group = ranges;
-        f.collapsed_items.clear();
-        // The field's items change, so a selection of its items or a label filter no longer applies.
-        for x in pt.filters.iter_mut().filter(|x| x.source_col.eq_ignore_ascii_case(&field)) {
-            x.selected = None;
-            if matches!(x.rule, Some(PivotRule::Label { .. })) {
-                x.rule = None;
+            if let (Some(a), Some(b)) = (start, end)
+                && a > b
+            {
+                return Err(other("The ending date must be after the starting date."));
             }
+            let dr = (start.is_some() || end.is_some() || days > 1).then_some(PivotDateRange { start, end, days });
+            set_grouping(pt, &field, &levels, None, dr)?;
+        } else {
+            set_grouping(pt, &field, &[], None, None)?;
         }
         Ok(json!({}))
     })
@@ -1502,14 +1678,10 @@ fn collapse(s: &mut Session, p: &Json) -> Result<Json> {
     update(s, p, |pt, src, wb| {
         let all = match &items {
             Some(v) => v.clone(),
-            None => {
-                let f = pt.rows.iter().chain(pt.columns.iter()).find(|f| f.source_col.eq_ignore_ascii_case(&field));
-                let g = f.map(pv::Grouping::of).unwrap_or_default();
-                match src.col(&field) {
-                    Some(c) => pv::distinct_labels(wb, src, c, g, 100_000),
-                    None => vec![],
-                }
-            }
+            None => match pv::resolve_name(src, pt, &field) {
+                Some((c, g)) => pv::distinct_labels(wb, src, c, g, 100_000),
+                None => vec![],
+            },
         };
         let f = axis_field(C, pt, &field)?;
         if on {
@@ -1636,8 +1808,12 @@ fn change_source(s: &mut Session, p: &Json) -> Result<Json> {
     update(s, p, move |pt, _, _| {
         pt.source = source.clone();
         let mut dropped: Vec<String> = vec![];
+        // Grouped fields and calculated items go with the source field they are made from.
+        pt.group_fields.retain(|g| src.col(&g.base).is_some());
+        pt.calculated_items.retain(|c| src.col(&c.field).is_some());
+        let groups: Vec<String> = pt.group_fields.iter().map(|g| g.name.clone()).collect();
         let keep = |name: &str, dropped: &mut Vec<String>| {
-            let ok = src.col(name).is_some();
+            let ok = src.col(name).is_some() || groups.iter().any(|g| g.eq_ignore_ascii_case(name));
             if !ok {
                 dropped.push(name.to_string());
             }
@@ -1679,6 +1855,16 @@ fn delete(s: &mut Session, p: &Json) -> Result<Json> {
             }
         }
         pv::clear_output(&mut cx.wb, si, pi);
+        // Its timelines no longer filter it.
+        if let Some(id) = cx.wb.sheet(si).and_then(|sh| sh.pivots.get(pi)).map(|pt| pt.id) {
+            for i in 0..cx.wb.sheets.len() {
+                if cx.wb.sheet(i).is_some_and(|sh| sh.timelines.iter().any(|t| t.pivots.contains(&id))) {
+                    for t in cx.sheet_mut(i)?.timelines.iter_mut() {
+                        t.pivots.retain(|x| *x != id);
+                    }
+                }
+            }
+        }
         let sh = cx.sheet_mut(si)?;
         if pi < sh.pivots.len() {
             sh.pivots.remove(pi);

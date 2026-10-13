@@ -661,6 +661,70 @@ pub struct Slicer {
     pub columns: u32,
 }
 
+/// The time level a timeline shows its periods at.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TimelineLevel {
+    Years,
+    Quarters,
+    #[default]
+    Months,
+    Days,
+}
+
+/// A timeline: an on-sheet filter of the date field of one or more PivotTables, by one
+/// contiguous period at a time level (Insert › Timeline). The PivotTables it is connected to show
+/// only the records whose date falls in the selection. As in Excel, the selection is kept in
+/// whole days and snapped to whole periods of the level it was made at.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Timeline {
+    pub id: u32,
+    /// The timeline's name (unique in the workbook, `Date`, `Date 1`…).
+    pub name: String,
+    /// Caption in the header.
+    pub caption: String,
+    /// The source field (a date column) it filters.
+    pub field: String,
+    /// Ids of the PivotTables it filters (Report Connections).
+    pub pivots: Vec<u32>,
+    pub anchor: Anchor,
+    pub level: TimelineLevel,
+    /// First and last day of the selection, as date serials (inclusive); `None` = all periods.
+    pub selection: Option<(f64, f64)>,
+    /// The level the selection was made at (the selection label follows it).
+    pub selection_level: TimelineLevel,
+    /// Leftmost date shown (the scroll position); `None` = the start of the data.
+    pub scroll: Option<f64>,
+    /// Timeline style name (`TimeSlicerStyleLight1`).
+    pub style: String,
+    pub show_header: bool,
+    pub show_selection_label: bool,
+    pub show_time_level: bool,
+    pub show_scrollbar: bool,
+}
+
+impl Default for Timeline {
+    fn default() -> Self {
+        Timeline {
+            id: 0,
+            name: String::new(),
+            caption: String::new(),
+            field: String::new(),
+            pivots: vec![],
+            anchor: Anchor::default(),
+            level: TimelineLevel::Months,
+            selection: None,
+            selection_level: TimelineLevel::Months,
+            scroll: None,
+            style: "TimeSlicerStyleLight1".into(),
+            show_header: true,
+            show_selection_label: true,
+            show_time_level: true,
+            show_scrollbar: true,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Orientation {
     #[default]
@@ -908,6 +972,49 @@ pub enum PivotDateGroup {
     Quarters,
     Months,
     Days,
+    Hours,
+    Minutes,
+    Seconds,
+}
+
+impl PivotDateGroup {
+    /// The date and time levels from finest to coarsest, as the Grouping dialog lists them.
+    pub const LEVELS: [PivotDateGroup; 7] = [
+        PivotDateGroup::Seconds,
+        PivotDateGroup::Minutes,
+        PivotDateGroup::Hours,
+        PivotDateGroup::Days,
+        PivotDateGroup::Months,
+        PivotDateGroup::Quarters,
+        PivotDateGroup::Years,
+    ];
+
+    /// Position in [`Self::LEVELS`] (0 = finest); `None` for no grouping.
+    pub fn fineness(self) -> Option<usize> {
+        Self::LEVELS.iter().position(|g| *g == self)
+    }
+}
+
+/// The Grouping dialog's bounds and day span for a date or time grouping: values before
+/// `start` or after `end` fall into one `<start` and one `>end` item, and with Days, `days` days
+/// make one item (`1/1/2026 - 1/7/2026`). `None` bounds are automatic (the first and last date).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PivotDateRange {
+    pub start: Option<f64>,
+    pub end: Option<f64>,
+    /// Number of days per item when grouping by days (1 = one item per calendar day).
+    pub days: u32,
+}
+
+impl PivotDateRange {
+    /// Most days one item may span (Excel's Number of days goes up to 32,767).
+    pub const MAX_DAYS: u32 = 32_767;
+}
+
+impl Default for PivotDateRange {
+    fn default() -> Self {
+        PivotDateRange { start: None, end: None, days: 1 }
+    }
 }
 
 /// Grouping of a number field into ranges of equal width (Group › Starting at, Ending at, By).
@@ -992,6 +1099,51 @@ pub struct PivotField {
     pub number_group: Option<PivotNumberGroup>,
     /// Item labels whose detail is hidden (collapsed).
     pub collapsed_items: Vec<String>,
+    /// Bounds and day span of a date grouping (`None`: automatic bounds, one day per item). A
+    /// field grouped at several levels (Years, Quarters, Months) is one entry per level, each
+    /// carrying the same range.
+    pub date_range: Option<PivotDateRange>,
+}
+
+/// Group Selection: a field (`Region2`) whose items gather items of a `base` field into named
+/// groups (`Group1`); base items in no group stay items of their own. Excel keeps it as an extra
+/// cache field with `discretePr`. Its name is used like a source field's in the areas.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PivotGroupField {
+    pub name: String,
+    /// The source field whose items are grouped.
+    pub base: String,
+    pub groups: Vec<PivotItemGroup>,
+}
+
+/// One manual group: its caption and the base items in it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PivotItemGroup {
+    pub name: String,
+    pub items: Vec<String>,
+}
+
+impl PivotGroupField {
+    /// The group holding base item `label`, if any.
+    pub fn group_of(&self, label: &str) -> Option<&PivotItemGroup> {
+        self.groups.iter().find(|g| g.items.iter().any(|i| i.eq_ignore_ascii_case(label)))
+    }
+}
+
+/// A calculated item: an item `name` added to `field`, whose values come from a formula over the
+/// field's other items (`=East+West`, `=East*1.1`, `=Region['North East']/2`). Its place in
+/// [`PivotTable::calculated_items`] is its solve order: where items of two fields meet, the later
+/// formula sets the value.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PivotCalcItem {
+    /// The field the item belongs to (a source field).
+    pub field: String,
+    pub name: String,
+    /// Formula text, starting with `=`.
+    pub formula: String,
 }
 
 /// Summarize-values-by function.
@@ -1234,6 +1386,17 @@ pub struct PivotTable {
     /// Position of Σ Values among the row fields (`None` = after the last). Only used with
     /// `values_on_rows`: in Columns Σ Values always comes after the last column field.
     pub values_position: Option<usize>,
+    /// Fields made by Group Selection (`Region2`), usable in the areas by name.
+    pub group_fields: Vec<PivotGroupField>,
+    /// Calculated items, in solve order.
+    pub calculated_items: Vec<PivotCalcItem>,
+}
+
+impl PivotTable {
+    /// The Group Selection field named `name`, if any.
+    pub fn group_field(&self, name: &str) -> Option<&PivotGroupField> {
+        self.group_fields.iter().find(|g| g.name.eq_ignore_ascii_case(name.trim()))
+    }
 }
 
 /// A calculated field: a formula over other fields (`=Sales*0.1`, `='Unit Price'*Units`). As in
@@ -1268,6 +1431,8 @@ impl Default for PivotTable {
             calculated_fields: vec![],
             values_on_rows: false,
             values_position: None,
+            group_fields: vec![],
+            calculated_items: vec![],
         }
     }
 }

@@ -211,17 +211,85 @@ fn cmp_items(a: &Item, b: &Item) -> Ordering {
     a.class.cmp(&b.class).then(a.num.total_cmp(&b.num)).then_with(|| a.text.cmp(&b.text))
 }
 
-/// How a field's values become items: as they are, by a date part, or by number range.
+/// How a field's values become items: as they are, by a date or time part (with the Grouping
+/// dialog's bounds and day span), by number range, or into manual groups (Group Selection).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct Grouping {
+pub struct Grouping<'a> {
     pub date: PivotDateGroup,
     pub number: Option<PivotNumberGroup>,
+    /// Bounds and day span of a date grouping.
+    pub range: Option<PivotDateRange>,
+    /// First day of the first item when grouping by several days from automatic bounds (the
+    /// first date in the source).
+    pub first_day: f64,
+    /// Last day the last N-day item reaches (Ending at, or the automatic end after the last date).
+    pub last_day: f64,
+    /// The Group Selection groups the field's items fall into.
+    pub manual: Option<&'a PivotGroupField>,
 }
 
-impl Grouping {
-    pub fn of(f: &PivotField) -> Grouping {
-        Grouping { date: f.date_group, number: f.number_group }
+impl<'a> Grouping<'a> {
+    /// The date or number grouping of an axis field entry (no manual groups, automatic first day 0).
+    pub fn of(f: &PivotField) -> Grouping<'static> {
+        Grouping { date: f.date_group, number: f.number_group, range: f.date_range, first_day: 0.0, last_day: f64::MAX, manual: None }
     }
+
+    /// Fills in what depends on the source: the first day of N-day items with automatic bounds.
+    fn on(mut self, src: &Source, col: usize) -> Self {
+        let Some(range) = self.range.filter(|r| self.date == PivotDateGroup::Days && r.days > 1) else { return self };
+        let (lo, hi) = src
+            .rows
+            .iter()
+            .filter_map(|r| match r.get(col) {
+                Some(Value::Number(n)) => Some(*n),
+                _ => None,
+            })
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), n| (lo.min(n), hi.max(n)));
+        self.first_day = range.start.unwrap_or(lo).floor();
+        // Excel's automatic end is the day after a last whole date (the last span is cut there).
+        let auto_end = if hi.fract() == 0.0 { hi + 1.0 } else { hi };
+        self.last_day = range.end.unwrap_or(auto_end).floor();
+        if !self.first_day.is_finite() || !self.last_day.is_finite() {
+            self.first_day = 0.0;
+            self.last_day = f64::MAX;
+        }
+        self
+    }
+}
+
+/// The source column and grouping of an axis field: a source field, or a Group Selection field
+/// (`Region2`) over one.
+pub fn resolve_field<'a>(src: &Source, pt: &'a PivotTable, f: &PivotField) -> Option<(usize, Grouping<'a>)> {
+    if let Some(c) = src.col(&f.source_col) {
+        return Some((c, Grouping::of(f).on(src, c)));
+    }
+    let gf = pt.group_field(&f.source_col)?;
+    let c = src.col(&gf.base)?;
+    Some((c, Grouping { manual: Some(gf), ..Grouping::default() }))
+}
+
+/// The source column and grouping of a field named `name` wherever it is: its first Rows or
+/// Columns entry, a Group Selection field, or a plain source field (report filters).
+pub fn resolve_name<'a>(src: &Source, pt: &'a PivotTable, name: &str) -> Option<(usize, Grouping<'a>)> {
+    match pt.rows.iter().chain(pt.columns.iter()).find(|f| f.source_col.eq_ignore_ascii_case(name.trim())) {
+        Some(f) => resolve_field(src, pt, f),
+        None => resolve_field(src, pt, &PivotField { source_col: name.trim().to_string(), ..PivotField::default() }),
+    }
+}
+
+/// `3/5/2026` for a date serial (the captions of day ranges and of the `<` and `>` items).
+fn mdy(wb: &Workbook, serial: f64) -> String {
+    match datetime_from_serial(wb.date_system, serial) {
+        Some(d) => format!("{}/{}/{}", d.month, d.day, d.year),
+        None => gridcraft_core::number_to_text(serial),
+    }
+}
+
+/// An hour as Excel's Hours grouping shows it: `12 AM`, `1 AM` … `11 PM`.
+pub fn hour_caption(h: u32) -> String {
+    let h = h % 24;
+    let twelve = if h.is_multiple_of(12) { 12 } else { h % 12 };
+    format!("{twelve} {}", if h < 12 { "AM" } else { "PM" })
 }
 
 /// (identity key, item) for a source value under a field's grouping.
@@ -235,6 +303,14 @@ fn make_item(wb: &Workbook, v: &Value, group: Grouping, fmt: &str, first: usize)
         first,
         formatted,
     };
+    if let Some(gf) = group.manual {
+        // Group Selection: base items in a group become that group's item.
+        let base = make_item(wb, v, Grouping::default(), fmt, first);
+        return match gf.group_of(&base.1.label) {
+            Some(g) => (format!("G{}", g.name.to_lowercase()), it(Value::text(g.name.as_str()), g.name.clone(), 1, 0.0, false)),
+            None => base,
+        };
+    }
     match v {
         Value::Empty => ("b".into(), it(Value::text("(blank)"), "(blank)".into(), 4, 0.0, false)),
         Value::Number(n) => {
@@ -252,6 +328,15 @@ fn make_item(wb: &Workbook, v: &Value, group: Grouping, fmt: &str, first: usize)
             if group.date != PivotDateGroup::None
                 && let Some(dt) = datetime_from_serial(wb.date_system, *n)
             {
+                let text = |label: String, num: f64, key: String| (key, it(Value::text(label.as_str()), label, 0, num, false));
+                let range = group.range.unwrap_or_default();
+                // Before Starting at / after Ending at: one item each.
+                if let Some(s) = range.start.filter(|s| n.floor() < s.floor()) {
+                    return text(format!("<{}", mdy(wb, s.floor())), f64::MIN, "lt".into());
+                }
+                if let Some(e) = range.end.filter(|e| n.floor() > e.floor()) {
+                    return text(format!(">{}", mdy(wb, e.floor())), f64::MAX, "gt".into());
+                }
                 let mon = MONTHS.get(dt.month.saturating_sub(1) as usize).copied().unwrap_or("Jan");
                 let (label, key) = match group.date {
                     PivotDateGroup::Years => (dt.year.to_string(), dt.year as f64),
@@ -260,9 +345,21 @@ fn make_item(wb: &Workbook, v: &Value, group: Grouping, fmt: &str, first: usize)
                         (format!("Qtr{q}"), q as f64)
                     }
                     PivotDateGroup::Months => (mon.to_string(), dt.month as f64),
+                    PivotDateGroup::Days if range.days > 1 => {
+                        // Spans of `days` days from Starting at (or the first date).
+                        let start = range.start.unwrap_or(group.first_day).floor();
+                        let days = f64::from(range.days.min(PivotDateRange::MAX_DAYS));
+                        let k = ((n.floor() - start) / days).floor();
+                        let lo = start + k * days;
+                        let hi = (lo + days - 1.0).min(group.last_day).max(lo);
+                        (format!("{} - {}", mdy(wb, lo), mdy(wb, hi)), lo)
+                    }
+                    PivotDateGroup::Hours => (hour_caption(dt.hour), dt.hour as f64),
+                    PivotDateGroup::Minutes => (format!(":{:02}", dt.minute), dt.minute as f64),
+                    PivotDateGroup::Seconds => (format!(":{:02}", dt.second), dt.second as f64),
                     _ => (format!("{}-{mon}", dt.day), (dt.month * 100 + dt.day) as f64),
                 };
-                return (format!("g{key}"), it(Value::text(label.as_str()), label, 0, key, false));
+                return text(label, key, format!("g{key}"));
             }
             let label = crate::display::format(v, fmt, wb).text;
             (format!("n{}", n.to_bits()), it(v.clone(), label, 0, *n, true))
@@ -287,6 +384,29 @@ impl FieldItems {
         self.items.push(item);
         self.index.insert(key, i);
         i
+    }
+    /// The item of calculated item `name` (a text item after the data items in source order).
+    fn intern_calc(&mut self, name: &str) -> u32 {
+        let key = format!("c{}", name.to_lowercase());
+        if let Some(i) = self.index.get(&key) {
+            return *i;
+        }
+        let i = self.items.len() as u32;
+        self.items.push(Item {
+            value: Value::text(name),
+            label: name.to_string(),
+            class: 1,
+            num: 0.0,
+            text: name.to_lowercase(),
+            first: usize::MAX,
+            formatted: false,
+        });
+        self.index.insert(key, i);
+        i
+    }
+    /// The item whose label is `label` (case-insensitive).
+    fn find(&self, label: &str) -> Option<u32> {
+        self.items.iter().position(|it| it.label.eq_ignore_ascii_case(label.trim())).map(|i| i as u32)
     }
     fn get(&self, i: u32) -> Option<&Item> {
         self.items.get(i as usize)
@@ -331,26 +451,35 @@ struct Acc {
     mean: f64,
     m2: f64,
     err: Option<CellError>,
+    /// Calculated item results added here: how many, and their total (a calculated item's result
+    /// is already a summary, so under Count it adds its value, not one).
+    calc_n: u64,
+    calc_count: f64,
 }
 
 impl Acc {
+    /// Folds a number into the sum, product, minimum and maximum.
+    fn fold(&mut self, n: f64) {
+        let first = self.nums + self.calc_n == 0;
+        self.sum += n;
+        if first {
+            self.prod = n;
+            self.min = n;
+            self.max = n;
+        } else {
+            self.prod *= n;
+            self.min = self.min.min(n);
+            self.max = self.max.max(n);
+        }
+    }
     fn add(&mut self, v: &Value) {
         match v {
             Value::Empty => {}
             Value::Number(n) => {
                 let n = *n;
+                self.fold(n);
                 self.count += 1;
                 self.nums += 1;
-                self.sum += n;
-                if self.nums == 1 {
-                    self.prod = n;
-                    self.min = n;
-                    self.max = n;
-                } else {
-                    self.prod *= n;
-                    self.min = self.min.min(n);
-                    self.max = self.max.max(n);
-                }
                 let d = n - self.mean;
                 self.mean += d / self.nums as f64;
                 self.m2 += d * (n - self.mean);
@@ -364,11 +493,23 @@ impl Acc {
             _ => self.count += 1,
         }
     }
+    /// Adds a calculated item's result for one combination of the other fields' items.
+    fn add_calc(&mut self, v: &Value) {
+        match v {
+            Value::Number(n) => {
+                self.fold(*n);
+                self.calc_n += 1;
+                self.calc_count += *n;
+            }
+            Value::Error(e) if self.err.is_none() => self.err = Some(*e),
+            _ => {}
+        }
+    }
     fn result(&self, f: PivotFunc) -> Value {
         let n = self.nums as f64;
         match f {
-            PivotFunc::Count => return Value::number(self.count as f64),
-            PivotFunc::CountNumbers => return Value::number(n),
+            PivotFunc::Count => return Value::number(self.count as f64 + self.calc_count),
+            PivotFunc::CountNumbers => return Value::number(n + self.calc_count),
             _ => {}
         }
         if let Some(e) = self.err {
@@ -384,9 +525,9 @@ impl Acc {
                     Value::number(self.sum / n)
                 }
             }
-            PivotFunc::Max => Value::number(if self.nums == 0 { 0.0 } else { self.max }),
-            PivotFunc::Min => Value::number(if self.nums == 0 { 0.0 } else { self.min }),
-            PivotFunc::Product => Value::number(if self.nums == 0 { 0.0 } else { self.prod }),
+            PivotFunc::Max => Value::number(if self.nums + self.calc_n == 0 { 0.0 } else { self.max }),
+            PivotFunc::Min => Value::number(if self.nums + self.calc_n == 0 { 0.0 } else { self.min }),
+            PivotFunc::Product => Value::number(if self.nums + self.calc_n == 0 { 0.0 } else { self.prod }),
             PivotFunc::StdDev | PivotFunc::Var => {
                 if self.nums < 2 {
                     div0
@@ -535,6 +676,20 @@ pub struct Output {
     pub chart_cols: Vec<(u32, String)>,
     /// Grid column holding the innermost row labels (`None` without row fields).
     pub label_col: Option<u32>,
+    /// The item label cells: which field and item each shows.
+    pub items: Vec<ItemCell>,
+}
+
+/// A report cell that shows an item of a row or column field.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ItemCell {
+    /// Grid row and column (relative to the report's top-left).
+    pub row: u32,
+    pub col: u32,
+    /// The field (as named in Rows or Columns) and the item's caption.
+    pub field: String,
+    pub label: String,
+    pub on_rows: bool,
 }
 
 impl Output {
@@ -944,8 +1099,15 @@ fn data_cols_exceed_sheet(col_groups: usize, grand_total: bool, values: usize) -
 pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Output, String> {
     let src = read_source(wb, &pt.source, pivot_sheet)?;
     let fmt_of = |c: usize| src.formats.get(c).cloned().unwrap_or_else(|| "General".into());
-    let rows: Vec<(usize, &PivotField)> = pt.rows.iter().filter_map(|f| src.col(&f.source_col).map(|c| (c, f))).collect();
-    let cols: Vec<(usize, &PivotField)> = pt.columns.iter().filter_map(|f| src.col(&f.source_col).map(|c| (c, f))).collect();
+    // Axis fields found in the source (source fields, or Group Selection fields over one), with
+    // the grouping that makes their items.
+    let row_axis: Vec<(usize, &PivotField, Grouping)> = pt.rows.iter().filter_map(|f| resolve_field(&src, pt, f).map(|(c, g)| (c, f, g))).collect();
+    let col_axis: Vec<(usize, &PivotField, Grouping)> =
+        pt.columns.iter().filter_map(|f| resolve_field(&src, pt, f).map(|(c, g)| (c, f, g))).collect();
+    let rows: Vec<(usize, &PivotField)> = row_axis.iter().map(|(c, f, _)| (*c, *f)).collect();
+    let cols: Vec<(usize, &PivotField)> = col_axis.iter().map(|(c, f, _)| (*c, *f)).collect();
+    let row_groups: Vec<Grouping> = row_axis.iter().map(|x| x.2).collect();
+    let col_groups: Vec<Grouping> = col_axis.iter().map(|x| x.2).collect();
     // Value fields: a source column, or a calculated field evaluated on sums (see `pivot_calc`).
     let calc = CalcSet::new(pt, &src.headers);
     let vals: Vec<(ValSrc, &PivotValue)> = pt
@@ -975,17 +1137,25 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
     if vals.len() > MAX_VALUE_FIELDS {
         return Err(format!("A PivotTable can have at most {MAX_VALUE_FIELDS} value fields."));
     }
-    let axis_group = |name: &str| -> Option<Grouping> {
-        pt.rows.iter().chain(pt.columns.iter()).find(|f| f.source_col.eq_ignore_ascii_case(name)).map(Grouping::of)
-    };
     // (column, filter, grouping used for labels, shown as a report filter)
     let filters: Vec<(usize, &PivotFilter, Grouping, bool)> = pt
         .filters
         .iter()
         .filter_map(|f| {
-            let c = src.col(&f.source_col)?;
-            let g = axis_group(&f.source_col);
-            Some((c, f, g.unwrap_or_default(), g.is_none()))
+            let (c, g) = resolve_name(&src, pt, &f.source_col)?;
+            let on_axis = pt.rows.iter().chain(pt.columns.iter()).any(|a| a.source_col.eq_ignore_ascii_case(&f.source_col));
+            Some((c, f, g, !on_axis))
+        })
+        .collect();
+    // Timelines connected to this PivotTable: (date column, first day, last day) of each selection.
+    let periods: Vec<(usize, f64, f64)> = wb
+        .sheets
+        .iter()
+        .flat_map(|s| s.timelines.iter())
+        .filter(|t| t.pivots.contains(&pt.id))
+        .filter_map(|t| {
+            let (a, b) = t.selection?;
+            Some((src.col(&t.field)?, a.floor(), b.floor()))
         })
         .collect();
     let shown_filters: Vec<&(usize, &PivotFilter, Grouping, bool)> = filters.iter().filter(|f| f.3).collect();
@@ -996,7 +1166,7 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
     // found in the source.
     let vpos: Option<usize> = (pt.values_on_rows && k > 1).then(|| {
         let p = pt.values_position.unwrap_or(pt.rows.len());
-        pt.rows.iter().take(p).filter(|f| src.col(&f.source_col).is_some()).count()
+        pt.rows.iter().take(p).filter(|f| resolve_field(&src, pt, f).is_some()).count()
     });
     let on_rows = vpos.is_some();
     let row_levels = rows.len() + usize::from(on_rows);
@@ -1060,16 +1230,23 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
                 continue 'rec;
             }
         }
+        // A timeline keeps the records whose date falls in its selection.
+        for (c, a, b) in &periods {
+            match rec.get(*c) {
+                Some(Value::Number(n)) if n.floor() >= *a && n.floor() <= *b => {}
+                _ => continue 'rec,
+            }
+        }
         if empty {
             continue;
         }
         let mut rp = Vec::with_capacity(rows.len());
-        for (((c, f), fi), fmt) in rows.iter().zip(row_items.iter_mut()).zip(row_fmts.iter()) {
-            rp.push(fi.intern(wb, rec.get(*c).unwrap_or(&Value::Empty), Grouping::of(f), fmt, ri));
+        for ((((c, _), fi), fmt), g) in rows.iter().zip(row_items.iter_mut()).zip(row_fmts.iter()).zip(row_groups.iter()) {
+            rp.push(fi.intern(wb, rec.get(*c).unwrap_or(&Value::Empty), *g, fmt, ri));
         }
         let mut cp = Vec::with_capacity(cols.len());
-        for (((c, f), fi), fmt) in cols.iter().zip(col_items.iter_mut()).zip(col_fmts.iter()) {
-            cp.push(fi.intern(wb, rec.get(*c).unwrap_or(&Value::Empty), Grouping::of(f), fmt, ri));
+        for ((((c, _), fi), fmt), g) in cols.iter().zip(col_items.iter_mut()).zip(col_fmts.iter()).zip(col_groups.iter()) {
+            cp.push(fi.intern(wb, rec.get(*c).unwrap_or(&Value::Empty), *g, fmt, ri));
         }
         add(&mut aggs, rec, &rp, &cp)?;
         // The column leaf this record lands in: its path cut after the first collapsed item (as in `flatten_cols`).
@@ -1112,6 +1289,21 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
             }
         }
     };
+
+    // ---- calculated items: for each combination of the other fields' items, a formula runs on
+    // the summaries of the items it names; the results then count in subtotals and grand totals
+    // like any item's, as in Excel.
+    let slot_funcs: Vec<Option<PivotFunc>> = vals
+        .iter()
+        .map(|(vs, v)| match vs {
+            ValSrc::Col(_) => Some(v.func),
+            ValSrc::Calc(_) => None,
+        })
+        .chain(extra.iter().map(|_| Some(PivotFunc::Sum)))
+        .collect();
+    let calc_items = prepare_calc_items(pt, &rows, &cols, &mut row_items, &mut col_items);
+    let levels = (rows.len(), cols.len());
+    apply_calc_items(wb, &calc_items, &slot_funcs, &mut aggs, (&mut row_set, &mut col_set), levels, &|_, _| false)?;
 
     // ---- value and Top 10 filters: each drops items among their siblings (by each item's total),
     // then the report is aggregated again without them, so subtotals and grand totals count only
@@ -1165,6 +1357,8 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
                 row_set.insert(rp);
                 col_set.insert(cp);
             }
+            let dropped = |rp: &[u32], cp: &[u32]| hit(&excl_rows, rp) || hit(&excl_cols, cp);
+            apply_calc_items(wb, &calc_items, &slot_funcs, &mut aggs, (&mut row_set, &mut col_set), levels, &dropped)?;
         }
     }
 
@@ -1280,6 +1474,7 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
             chart_rows: vec![],
             chart_cols: vec![],
             label_col: None,
+            items: vec![],
         });
     }
 
@@ -1303,6 +1498,7 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
         }
     };
 
+    let mut item_cells: Vec<ItemCell> = Vec::new();
     // ---- header rows
     if cols.is_empty() {
         let r = g.push_row(RowKind::Header)?;
@@ -1341,6 +1537,15 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
                             let Some(item) = col_items.get(lv).and_then(|fi| fi.get(it)) else { continue };
                             let fmt = if item.formatted { cols.get(lv).map(|(cc, _)| fmt_of(*cc)) } else { None };
                             g.set(first_level + lv, c, item.value.clone(), CellKind::ColLabel, 0, fmt);
+                            if let Some((_, f)) = cols.get(lv) {
+                                item_cells.push(ItemCell {
+                                    row: (first_level + lv) as u32,
+                                    col: c as u32,
+                                    field: f.source_col.clone(),
+                                    label: item.label.clone(),
+                                    on_rows: false,
+                                });
+                            }
                         }
                     }
                     if k > 1
@@ -1589,6 +1794,18 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
         }
         for (c, v, indent, fmt) in &line.labels {
             g.set(r, *c, v.clone(), ck.0, *indent, fmt.clone());
+            // The level a label is at: its indent in Compact form, else its column; Σ Values
+            // (in Rows) counts as a level of its own.
+            let level = if compact { *indent as usize } else { *c };
+            let depth = match vpos {
+                Some(p) if level == p => continue,
+                Some(p) if level > p => level - 1,
+                _ => level,
+            };
+            if let (LineKind::Item(_), Some(&it), Some(f)) = (line.kind, line.path.get(depth), row_fields.get(depth)) {
+                let label = ctx.row_items.get(depth).map(|fi| fi.label(it)).unwrap_or_default();
+                item_cells.push(ItemCell { row: r as u32, col: *c as u32, field: f.source_col.clone(), label, on_rows: true });
+            }
         }
         if !line.values {
             continue;
@@ -1603,7 +1820,141 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
             g.set(r, l + j, shown, ck.1, 0, data_fmt.get(*vi).cloned().flatten());
         }
     }
-    Ok(Output { width: g.width as u32, grid: g.rows, row_kinds: g.kinds, body_offset, chart_rows, chart_cols, label_col })
+    Ok(Output { width: g.width as u32, grid: g.rows, row_kinds: g.kinds, body_offset, chart_rows, chart_cols, label_col, items: item_cells })
+}
+
+/// A calculated item placed on an axis of the report.
+struct CalcAt {
+    on_rows: bool,
+    /// Depth of its field on that axis.
+    depth: usize,
+    /// Its item id in the field's items.
+    item: u32,
+    /// Not hidden by its field's own filter.
+    shown: bool,
+    compiled: Result<crate::pivot_calc::Compiled, String>,
+    /// Item ids of the formula's references, in `compiled.refs` order (`None`: not an item now).
+    refs: Vec<Option<u32>>,
+}
+
+/// Most calculated item results one report computes (combinations × value fields).
+const MAX_CALC_RESULTS: usize = 2_000_000;
+
+/// The calculated items whose field is in Rows or Columns, as items of that field.
+fn prepare_calc_items(
+    pt: &PivotTable,
+    rows: &[(usize, &PivotField)],
+    cols: &[(usize, &PivotField)],
+    row_items: &mut [FieldItems],
+    col_items: &mut [FieldItems],
+) -> Vec<CalcAt> {
+    let place = |field: &str| {
+        let pos = |list: &[(usize, &PivotField)]| list.iter().position(|(_, f)| f.source_col.eq_ignore_ascii_case(field));
+        match (pos(rows), pos(cols)) {
+            (Some(d), _) => Some((true, d)),
+            (None, Some(d)) => Some((false, d)),
+            _ => None,
+        }
+    };
+    // Every calculated item is an item before any formula is read, so formulas may name them.
+    let mut placed: Vec<(&PivotCalcItem, bool, usize, u32)> = Vec::new();
+    for ci in pt.calculated_items.iter().take(crate::pivot_items::MAX_CALC_ITEMS) {
+        let Some((on_rows, depth)) = place(&ci.field) else { continue };
+        let items = if on_rows { row_items.get_mut(depth) } else { col_items.get_mut(depth) };
+        let Some(items) = items else { continue };
+        placed.push((ci, on_rows, depth, items.intern_calc(&ci.name)));
+    }
+    placed
+        .into_iter()
+        .map(|(ci, on_rows, depth, item)| {
+            let items: Option<&FieldItems> = if on_rows { row_items.get(depth) } else { col_items.get(depth) };
+            let lookup = |n: &str| items.and_then(|fi| fi.find(n).map(|i| fi.label(i)));
+            let compiled = crate::pivot_items::compile(&ci.formula, &ci.field, &lookup);
+            let refs = match &compiled {
+                Ok(c) => c.refs.iter().map(|r| items.and_then(|fi| fi.find(r))).collect(),
+                Err(_) => vec![],
+            };
+            let filter = pt.filters.iter().find(|f| f.source_col.eq_ignore_ascii_case(&ci.field));
+            let shown = filter.is_none_or(|f| {
+                f.selected.as_ref().is_none_or(|sel| sel.iter().any(|x| x.eq_ignore_ascii_case(&ci.name)))
+                    && match &f.rule {
+                        Some(PivotRule::Label { op, value, value2 }) => label_matches(*op, &ci.name, value, value2),
+                        _ => true,
+                    }
+            });
+            CalcAt { on_rows, depth, item, shown, compiled, refs }
+        })
+        .collect()
+}
+
+/// Adds each calculated item's results to the aggregates, in solve order: for every combination
+/// of the other fields' items (`levels` = row and column depths of a full path) its formula runs
+/// on the summaries of the items it names, and the result counts at every level above, so
+/// subtotals and grand totals include it. `skip` leaves out combinations a value filter dropped.
+fn apply_calc_items(
+    wb: &Workbook,
+    calc: &[CalcAt],
+    funcs: &[Option<PivotFunc>],
+    aggs: &mut AggMap,
+    sets: (&mut HashSet<Vec<u32>>, &mut HashSet<Vec<u32>>),
+    levels: (usize, usize),
+    skip: &dyn Fn(&[u32], &[u32]) -> bool,
+) -> Result<(), String> {
+    let (row_set, col_set) = sets;
+    for ci in calc.iter().filter(|c| c.shown) {
+        let place = |rp: &[u32], cp: &[u32], item: u32| -> Option<(Vec<u32>, Vec<u32>)> {
+            let (mut r, mut c) = (rp.to_vec(), cp.to_vec());
+            *(if ci.on_rows { r.get_mut(ci.depth) } else { c.get_mut(ci.depth) })? = item;
+            Some((r, c))
+        };
+        let contexts: HashSet<(Vec<u32>, Vec<u32>)> = aggs
+            .keys()
+            .filter(|(rp, cp)| rp.len() == levels.0 && cp.len() == levels.1)
+            .filter_map(|(rp, cp)| place(rp, cp, ci.item))
+            .filter(|(rp, cp)| !skip(rp, cp))
+            .collect();
+        if contexts.len().saturating_mul(funcs.len().max(1)) > MAX_CALC_RESULTS {
+            return Err("The PivotTable has too many calculated item values.".into());
+        }
+        let mut results: Vec<(Vec<u32>, Vec<u32>, Vec<Option<Value>>)> = Vec::with_capacity(contexts.len());
+        for (rp, cp) in contexts {
+            let leaf = |item: Option<u32>| item.and_then(|it| place(&rp, &cp, it)).and_then(|key| aggs.get(&key));
+            let vals: Vec<Option<Value>> = funcs
+                .iter()
+                .enumerate()
+                .map(|(j, f)| {
+                    let f = (*f)?;
+                    Some(match &ci.compiled {
+                        Ok(c) => {
+                            let args: Vec<Value> =
+                                ci.refs.iter().map(|r| leaf(*r).and_then(|a| a.get(j)).map_or(Value::Number(0.0), |a| a.result(f))).collect();
+                            crate::pivot_calc::eval(wb, c, &args)
+                        }
+                        Err(_) => Value::Error(CellError::Name),
+                    })
+                })
+                .collect();
+            results.push((rp, cp, vals));
+        }
+        for (rp, cp, vals) in results {
+            for a in 0..=rp.len() {
+                for b in 0..=cp.len() {
+                    let e = aggs.entry((rp[..a].to_vec(), cp[..b].to_vec())).or_insert_with(|| vec![Acc::default(); funcs.len()]);
+                    for (acc, v) in e.iter_mut().zip(vals.iter()) {
+                        if let Some(v) = v {
+                            acc.add_calc(v);
+                        }
+                    }
+                }
+            }
+            row_set.insert(rp);
+            col_set.insert(cp);
+        }
+        if aggs.len() > 5_000_000 {
+            return Err("The PivotTable report is too large.".into());
+        }
+    }
+    Ok(())
 }
 
 /// A Show Values As base item, resolved against the base field's items.
@@ -1901,6 +2252,16 @@ fn rebind_charts(wb: &mut Workbook, sheet: &str, pivot: &str, origin: CellRef, o
             ch.series = series.clone();
         }
     }
+}
+
+/// The item label cells of a PivotTable's report, at their sheet cells (an empty list when the
+/// report can't be computed).
+pub fn report_items(wb: &Workbook, sheet: usize, idx: usize) -> Vec<(CellRef, ItemCell)> {
+    let Some(pt) = wb.sheet(sheet).and_then(|s| s.pivots.get(idx)) else { return vec![] };
+    let Ok(out) = compute(wb, pt, sheet) else { return vec![] };
+    let k = out.body_offset;
+    let origin_row = if pt.anchor.row >= k { pt.anchor.row - k } else { pt.anchor.row };
+    out.items.into_iter().filter_map(|it| Some((CellRef::new(origin_row.checked_add(it.row)?, pt.anchor.col.checked_add(it.col)?), it))).collect()
 }
 
 /// Clears a pivot's last output area.
