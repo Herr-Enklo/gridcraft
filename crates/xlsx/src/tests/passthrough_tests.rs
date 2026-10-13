@@ -374,6 +374,111 @@ fn a_new_link_follows_the_kept_ones() {
     assert_eq!(again.find(link.as_bytes()).len(), 1);
 }
 
+/// The link parts of a saved workbook, in `<externalReferences>` order.
+fn link_parts(u: &Unpacked) -> Vec<String> {
+    let wbx = u.text("xl/workbook.xml");
+    let Some(start) = wbx.find("<externalReferences") else { return vec![] };
+    let refs = &wbx[start..wbx.find("</externalReferences>").unwrap()];
+    refs.split("r:id=\"").skip(1).map(|s| u.target("xl/workbook.xml", &s[..s.find('"').unwrap()]).1).collect()
+}
+
+/// Data › Workbook Links: a link changed in GridCraft (values updated, source changed) is written
+/// from the model in its place, links left alone stay byte for byte, and a removed link's part
+/// goes with it while the ones after it move up.
+#[test]
+fn changed_links_are_written_from_the_model_in_place() {
+    use gridcraft_core::{CellRef, Value};
+    use gridcraft_model::{Cell, ExternalBook, ExternalSheet, Formula};
+    let (mut wb, _) = read_xlsx(&rich_package()).unwrap();
+    let typed = wb.link_typed_text(r"'C:\links\[Source.xlsx]Sheet1'!A1+[1]Sheet1!A1");
+    wb.sheet_mut(1).unwrap().set_cell(CellRef::new(0, 0), Cell::formula(Formula::new(&typed)));
+    let (wb, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert_eq!(wb.external_books.iter().map(|b| b.kept).collect::<Vec<_>>(), [Some(0), Some(1)]);
+    let first = Unpacked::new(&write_xlsx(&wb).unwrap());
+    let kept: Vec<Vec<u8>> = link_parts(&first).iter().map(|p| first.parts[p].clone()).collect();
+    assert_eq!(kept[0], EXTERNAL_LINK.as_bytes());
+
+    // Link 1's values updated: its part comes from the model, link 2's is kept.
+    let mut changed = wb.clone();
+    Arc::make_mut(&mut changed.external_books)[0] = ExternalBook {
+        path: wb.external_books[0].path.clone(),
+        kept: None,
+        sheets: vec![ExternalSheet { name: "Sheet1".into(), cells: vec![(CellRef::new(0, 0), Value::Number(42.0))], refresh_error: false }],
+        names: vec![],
+    };
+    let out = write_xlsx(&changed).unwrap();
+    let u = Unpacked::new(&out);
+    u.assert_valid();
+    let parts = link_parts(&u);
+    assert_eq!(parts.len(), 2);
+    let link = u.text(&parts[0]);
+    assert!(link.contains(r#"<cell r="A1"><v>42</v></cell>"#), "{link}");
+    assert_eq!(u.rels(&parts[0])[0].2, "file:///C:/never/opened/Book2.xlsx");
+    assert_eq!(u.parts[&parts[1]], kept[1]);
+    assert!(u.find(EXTERNAL_LINK.as_bytes()).is_empty(), "the old part of link 1 isn't written");
+    let (back, _) = read_xlsx(&out).unwrap();
+    assert_eq!(back.external_books[0].sheets[0].value(CellRef::new(0, 0)), Value::Number(42.0));
+
+    // Link 1 removed (Break Link): `[2]` is now `[1]`, its part kept as it was.
+    let mut removed = wb.clone();
+    Arc::make_mut(&mut removed.external_books).remove(0);
+    removed.sheet_mut(1).unwrap().set_cell(CellRef::new(0, 0), Cell::formula(Formula::new("[1]Sheet1!A1")));
+    let u = Unpacked::new(&write_xlsx(&removed).unwrap());
+    u.assert_valid();
+    let parts = link_parts(&u);
+    assert_eq!(parts.len(), 1);
+    assert_eq!(u.parts[&parts[0]], kept[1]);
+    assert!(u.find(EXTERNAL_LINK.as_bytes()).is_empty());
+    assert_eq!(u.parts.keys().filter(|p| p.contains("externalLinks/externalLink")).count(), 1, "{:?}", u.parts.keys().collect::<Vec<_>>());
+
+    // Every link gone: no <externalReferences> at all.
+    let mut none = wb.clone();
+    none.external_books = Arc::default();
+    none.sheet_mut(1).unwrap().remove_cell(CellRef::new(0, 0));
+    let u = Unpacked::new(&write_xlsx(&none).unwrap());
+    u.assert_valid();
+    assert!(!u.text("xl/workbook.xml").contains("externalReference"));
+    assert!(u.parts.keys().all(|p| !p.contains("externalLink")), "{:?}", u.parts.keys().collect::<Vec<_>>());
+}
+
+/// The startup prompt for links (`workbookPr updateLinks`) is read and written; the default
+/// (`userSet`) isn't written, as Excel doesn't.
+#[test]
+fn the_startup_prompt_for_links_round_trips() {
+    use gridcraft_model::UpdateLinks;
+    let mut wb = gridcraft_model::Workbook::new();
+    for mode in [UpdateLinks::Never, UpdateLinks::Always, UpdateLinks::UserSet] {
+        wb.update_links = mode;
+        let out = write_xlsx(&wb).unwrap();
+        let book = Unpacked::new(&out).text("xl/workbook.xml");
+        assert_eq!(book.contains("updateLinks"), mode != UpdateLinks::UserSet, "{book}");
+        assert_eq!(read_xlsx(&out).unwrap().0.update_links, mode);
+    }
+    wb.date_system = gridcraft_core::DateSystem::D1904;
+    wb.update_links = UpdateLinks::Never;
+    let u = Unpacked::new(&write_xlsx(&wb).unwrap());
+    assert!(u.text("xl/workbook.xml").contains(r#"<workbookPr date1904="1" updateLinks="never"/>"#));
+}
+
+/// Save As into another folder rewrites the relative path of a link written from the model, as
+/// it does for kept link parts (#801).
+#[test]
+fn save_as_rebases_links_written_from_the_model() {
+    use gridcraft_model::ExternalBook;
+    let mut wb = gridcraft_model::Workbook::new();
+    let root = std::env::temp_dir();
+    wb.source_dir = Some(root.join("a"));
+    wb.external_books = Arc::new(vec![
+        ExternalBook { path: "Source.xlsx".into(), ..Default::default() },
+        ExternalBook { path: r"sub\My Data.xlsx".into(), ..Default::default() },
+        ExternalBook { path: r"C:\links\Fixed.xlsx".into(), ..Default::default() },
+    ]);
+    let moved = crate::rebase_links(&wb, &root.join("a").join("b")).unwrap();
+    let paths: Vec<&str> = moved.external_books.iter().map(|b| b.path.as_str()).collect();
+    assert_eq!(paths, ["../Source.xlsx", "../sub/My Data.xlsx", r"C:\links\Fixed.xlsx"]);
+    assert!(crate::rebase_links(&wb, &root.join("a")).is_none());
+}
+
 /// #324: an openpyxl-style workbook whose sheet carries printer settings.
 #[test]
 fn printer_settings_and_page_setup_id_survive_save() {

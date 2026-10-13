@@ -3,7 +3,9 @@
 //! A formula reaching into another workbook (`[1]Prices!B2`, `'[1]P&L'!A7:A99`) names it by its
 //! position in `<externalReferences>`. Excel stores the values it last read from each linked
 //! workbook in the link part (`<externalBook><sheetDataSet>`) and calculates with them while the
-//! source is closed. The parts themselves are carried through unchanged by `passthrough`.
+//! source is closed. The parts themselves are carried through unchanged by `passthrough` while
+//! the link is unchanged; a link added or changed in GridCraft (values refreshed, source changed)
+//! is written from the model.
 
 use std::fmt::Write as _;
 
@@ -23,7 +25,7 @@ const CT_EXTERNAL_LINK: &str = "application/vnd.openxmlformats-officedocument.sp
 pub(crate) fn read(cx: &mut Ctx<'_>, wb_xml: &El, wb_rels: &[Rel]) -> Result<Vec<ExternalBook>, IoError> {
     let Some(refs) = wb_xml.child("externalReferences") else { return Ok(vec![]) };
     let mut books = vec![];
-    for r in refs.kids("externalReference") {
+    for (k, r) in refs.kids("externalReference").enumerate() {
         let target = r.attr("id").and_then(|id| wb_rels.iter().find(|x| x.id == id)).map(|x| x.target.clone());
         let book = match target {
             Some(t) => match cx.optional_xml(&t)?.as_ref().and_then(|x| x.child("externalBook")) {
@@ -38,7 +40,8 @@ pub(crate) fn read(cx: &mut Ctx<'_>, wb_xml: &El, wb_rels: &[Rel]) -> Result<Vec
             },
             None => ExternalBook::default(),
         };
-        books.push(book);
+        // Saving writes the k-th link part back as it was while the link stays unchanged.
+        books.push(ExternalBook { kept: Some(k), ..book });
     }
     Ok(books)
 }
@@ -155,31 +158,35 @@ fn value(c: &El) -> Value {
     }
 }
 
-/// Adds a link part for each link added in GridCraft (a typed reference to another workbook)
-/// after the ones read from the file, which `passthrough` writes as they were. `kept` is the kept
-/// links' `<externalReferences>`; returns it with the new links in it, so `[n]` in formulas stays
-/// the n-th link. When links read from the file couldn't be kept, none are added after them.
-pub(crate) fn write(wb: &Workbook, kept: String, wb_rels: &mut Rels, out: &mut Out) -> String {
-    let known = kept.matches("<externalReference ").count();
-    let new = wb.external_books.get(known..).unwrap_or_default();
-    if !new.iter().all(|b| b.added) {
-        return kept;
+/// The workbook's `<externalReferences>`: one entry per link, in order, so `[n]` in formulas
+/// stays the n-th link. A link read from the file and unchanged is its kept part (`kept` holds the
+/// new relationship ids `passthrough` gave the kept link parts, by `ExternalBook::kept`); any
+/// other link (added by a typed reference, refreshed, its source changed) gets a part written from
+/// the model. A link that is neither (a DDE or OLE link, when the file's links couldn't be kept)
+/// can't be written, and then no link is: no `[n]` may name a different link than in the model.
+pub(crate) fn write(wb: &Workbook, kept: &[Option<String>], wb_rels: &mut Rels, out: &mut Out) -> String {
+    let books = &wb.external_books;
+    let kept_id = |b: &ExternalBook| b.kept.and_then(|k| kept.get(k).cloned().flatten());
+    if books.is_empty() || books.iter().any(|b| kept_id(b).is_none() && b.path.is_empty()) {
+        return String::new();
     }
-    let mut added = String::new();
-    for (i, b) in new.iter().enumerate().map(|(i, b)| (i + known, b)) {
-        let name = out.kept.claim(&format!("xl/externalLinks/externalLink{}.xml", i + 1));
-        let mut rels = Rels::default();
-        let id = rels.add_external("externalLinkPath", &link_target(&b.path));
-        out.part(&name, Some(CT_EXTERNAL_LINK), part_xml(b, &id).into_bytes());
-        out.part(&crate::passthrough::rels_part_name(&name), None, rels.xml().into_bytes());
-        let rid = wb_rels.add("externalLink", &format!("/{name}"));
-        let _ = write!(added, "<externalReference r:id=\"{rid}\"/>");
+    let mut x = String::from("<externalReferences>");
+    for (i, b) in books.iter().enumerate() {
+        let rid = match kept_id(b) {
+            Some(rid) => rid,
+            None => {
+                let name = out.kept.claim(&format!("xl/externalLinks/externalLink{}.xml", i + 1));
+                let mut rels = Rels::default();
+                let id = rels.add_external("externalLinkPath", &link_target(&b.path));
+                out.part(&name, Some(CT_EXTERNAL_LINK), part_xml(b, &id).into_bytes());
+                out.part(&crate::passthrough::rels_part_name(&name), None, rels.xml().into_bytes());
+                wb_rels.add("externalLink", &format!("/{name}"))
+            }
+        };
+        let _ = write!(x, "<externalReference r:id=\"{}\"/>", esc_attr(&rid));
     }
-    match kept.rfind("</externalReferences>") {
-        _ if added.is_empty() => kept,
-        Some(end) => format!("{}{added}{}", kept.get(..end).unwrap_or(""), kept.get(end..).unwrap_or("")),
-        None => format!("{kept}<externalReferences>{added}</externalReferences>"),
-    }
+    x.push_str("</externalReferences>");
+    x
 }
 
 /// An `externalLink` part for `b`: its sheets, names and saved values; a sheet whose values

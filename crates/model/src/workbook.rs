@@ -87,18 +87,20 @@ pub struct DocProps {
 
 /// The values a linked workbook had when the file was last saved with the link updated
 /// (`<externalLink>` `sheetDataSet`). `[n]` in a formula is the workbook's `external_books[n - 1]`.
-/// GridCraft doesn't open linked files: references into them read these values, as Excel does
-/// while the source is closed.
+/// References into them read these values, as Excel does while the source is closed; Data ›
+/// Workbook Links › Refresh reads them again from the source file.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ExternalBook {
     /// The linked file as the link stores it: absolute (`C:\links\Source.xlsx`) or relative to
     /// this workbook's folder (`Source.xlsx`). Empty when the link names no file.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub path: String,
-    /// Added in GridCraft (by a typed reference) rather than read from the file: saving writes
-    /// its link part from this model, where links read from the file are kept as they were.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub added: bool,
+    /// Which of the file's link parts (`<externalReference>`, 0-based) holds this link exactly as it
+    /// was read: saving writes that part back unchanged. `None` for a link added in GridCraft (a
+    /// typed reference) or changed since it was read (values refreshed, source changed): saving
+    /// writes its part from this model. Not in JSON, which keeps no file parts.
+    #[serde(skip)]
+    pub kept: Option<usize>,
     pub sheets: Vec<ExternalSheet>,
     /// The linked workbook's defined names (`[1]!Rates`, `[1]Sheet1!Rates`).
     pub names: Vec<ExternalName>,
@@ -121,6 +123,40 @@ pub struct ExternalName {
     pub sheet: Option<usize>,
     /// What the name refers to (without `=`); its sheets are the linked workbook's.
     pub refers_to: String,
+}
+
+/// What Excel does about a workbook's links when it opens (Data › Workbook Links › Startup
+/// Prompt…, `workbookPr updateLinks`, ECMA-376 `ST_UpdateLinks`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum UpdateLinks {
+    /// Let users choose to display the alert or not (`userSet`, the default).
+    #[default]
+    UserSet,
+    /// Don't display the alert and don't update automatic links (`never`).
+    Never,
+    /// Don't display the alert and update links (`always`).
+    Always,
+}
+
+impl UpdateLinks {
+    /// The `updateLinks` attribute value.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            UpdateLinks::UserSet => "userSet",
+            UpdateLinks::Never => "never",
+            UpdateLinks::Always => "always",
+        }
+    }
+    /// An `updateLinks` value (or a command's `mode`), case-insensitive.
+    pub fn parse(s: &str) -> Option<UpdateLinks> {
+        match s.trim().to_ascii_lowercase().replace([' ', '-', '_', '\'', ','], "").as_str() {
+            "userset" | "letuserschoose" | "letuserschoosetodisplaythealertornot" => Some(UpdateLinks::UserSet),
+            "never" | "dontdisplaythealertanddontupdateautomaticlinks" | "dontdisplaydontupdate" => Some(UpdateLinks::Never),
+            "always" | "dontdisplaythealertandupdatelinks" | "dontdisplayupdate" => Some(UpdateLinks::Always),
+            _ => None,
+        }
+    }
 }
 
 impl ExternalBook {
@@ -207,6 +243,13 @@ pub struct Workbook {
     /// as sheets are: edits and undo history clone the workbook, never this cache.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub external_books: Arc<Vec<ExternalBook>>,
+    /// The workbook's startup prompt for its links (`workbookPr updateLinks`).
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub update_links: UpdateLinks,
+}
+
+fn is_default<T: Default + PartialEq>(v: &T) -> bool {
+    *v == T::default()
 }
 
 impl Default for Workbook {
@@ -236,6 +279,7 @@ impl Workbook {
             preserved: None,
             source_dir: None,
             external_books: Arc::default(),
+            update_links: UpdateLinks::default(),
         }
     }
     pub fn sheet(&self, i: usize) -> Option<&Sheet> {
