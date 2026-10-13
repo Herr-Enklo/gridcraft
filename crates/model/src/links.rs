@@ -143,20 +143,23 @@ impl Workbook {
         let (book, rest) = self.book_of(s)?;
         let (sheet, name) = rest.split_once('!')?;
         let qualifier = if sheet.is_empty() { book.path.clone() } else { format!("{}[{}]{sheet}", book.folder(), book.file_name()) };
-        Some(format!("{}!{name}", gridcraft_formula::quote_sheet(&qualifier)))
+        // Names hold their qualifier bare; the printer quotes it (`'C:\links\Source.xlsx'!Rate`).
+        Some(format!("{qualifier}!{name}"))
     }
 }
 
 /// `C:\links\[Source.xlsx]Sheet1` → (`C:\links\Source.xlsx`, `Sheet1`). `None` for `[1]Sheet1`,
 /// already a link's number, and for anything without a file name in brackets (sheet names
-/// can't hold brackets).
-fn typed_book(s: &str) -> Option<(String, &str)> {
+/// can't hold brackets). The bracketed part must look like a file (a folder before it, or an
+/// extension: `[Source.xlsx]`), so `[-1]Sheet1` and `[ 1]Sheet1` stay malformed indexes.
+pub fn typed_book(s: &str) -> Option<(String, &str)> {
     let (folder, rest) = s.split_once('[')?;
     let (file, sheet) = rest.split_once(']')?;
-    if file.is_empty() || (folder.is_empty() && file.bytes().all(|b| b.is_ascii_digit())) {
+    if file.is_empty() || (folder.is_empty() && file.bytes().all(|b| b.is_ascii_digit())) || sheet.contains(['[', ']']) {
         return None;
     }
-    Some((format!("{folder}{file}"), sheet))
+    let path = format!("{folder}{file}");
+    looks_like_file(&path).then_some((path, sheet))
 }
 
 /// Whether the qualifier of `Source.xlsx!Rate` names a file: it has a folder or an extension

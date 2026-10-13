@@ -262,10 +262,16 @@ fn typed_references_to_workbooks_that_are_not_linked_are_refused_on_entry() {
         "='Sheet1:[5]Dec'!A1",
         "='[-1]Sheet1'!A1",
         "='[ 1]Sheet1'!A1",
-        "='[Book2.xlsx]Sheet1'!A1",
+        "='[Book2]Sheet1'!A1",
     ] {
         refused(&mut s, input);
     }
+    // A file typed in brackets isn't an index: it goes through a new link (#804), `[1]` in the file.
+    let mut typed = self::s();
+    typed.execute("cell.set", json!({"cell": "A1", "input": "='[Book2.xlsx]Sheet1'!A1"})).unwrap();
+    let wb = &typed.doc().unwrap().wb;
+    assert_eq!(wb.active().unwrap().cell(CellRef::parse("A1").unwrap()).unwrap().formula.as_ref().unwrap().text, "[1]Sheet1!A1");
+    assert_eq!(wb.external_books.len(), 1);
     assert!(s.execute("formulas.defineName", json!({"name": "Linked", "refersTo": "=[1]Sheet1!A1"})).is_err());
     // Conditional formats and data validation can't refer to other workbooks.
     let cf = |f: &str| json!({"range": "A1:A3", "rule": {"type": "expression", "formula": f}});
@@ -316,8 +322,11 @@ fn typed_references_to_workbooks_that_are_not_linked_are_refused_on_entry() {
     assert_eq!(v(&s, "E1"), Value::Number(5.0));
     // In another workbook it's kept only where that workbook holds the same link at that index;
     // otherwise `[1]` there would be a link it doesn't have (or a different workbook): `#REF!`.
-    let other =
-        gridcraft_model::ExternalBook { sheets: vec![gridcraft_model::ExternalSheet { name: "T".into(), ..Default::default() }], names: vec![], ..Default::default() };
+    let other = gridcraft_model::ExternalBook {
+        sheets: vec![gridcraft_model::ExternalSheet { name: "T".into(), ..Default::default() }],
+        names: vec![],
+        ..Default::default()
+    };
     for (books, formula) in [(vec![], "=#REF!"), (vec![other], "=#REF!"), (vec![link], "=[1]S!$A$1")] {
         s.new_workbook();
         std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).external_books = books.into();

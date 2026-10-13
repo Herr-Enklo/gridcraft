@@ -184,7 +184,8 @@ fn references_into_linked_workbooks_keep_their_position_and_size() {
     }
     cells.sort_by_key(|(p, _)| *p);
     t.wb.external_books =
-        vec![ExternalBook { sheets: vec![ExternalSheet { name: "Data".into(), cells, refresh_error: false }], names: vec![], ..Default::default() }].into();
+        vec![ExternalBook { sheets: vec![ExternalSheet { name: "Data".into(), cells, refresh_error: false }], names: vec![], ..Default::default() }]
+            .into();
     // `@` takes the cell on the formula's row (or column), as for this workbook's references.
     for at in ["D2", "D3", "D4", "D5", "D6"] {
         t.set(at, "=@[1]Data!B:B");

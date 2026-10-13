@@ -153,6 +153,7 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
         let expr = wb.name_call_case(expr);
         check_arg_counts(&expr)?;
         // Another workbook by file name or path: files only hold the number of its link, `[1]`.
+        // Last, so a formula refused above never leaves a new link behind.
         let expr = wb.link_typed_books(expr);
         let mut cell = Cell::formula(Formula::from_expr(expr));
         cell.style = style;
@@ -196,8 +197,10 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
 
 /// The workbook a sheet name (or the sheet part of a qualified name) is in: `Ok(None)` = this one,
 /// `Ok(Some(n))` = `[n]Prices`, linked workbook `n` (`[0]` = this one). `Err` = a bracketed prefix
-/// that names no workbook (`[-1]`, `[Book2.xlsx]`, `[ 1]`): a sheet name can't contain `[` or `]`,
-/// and a formula names a linked workbook only by its index.
+/// that names no workbook (`[-1]`, `[Book2]`, `[ 1]`): a sheet name can't contain `[` or `]`, and a
+/// stored formula names a linked workbook only by its index. A file typed in brackets
+/// (`[Book2.xlsx]`, `C:\links\[Book2.xlsx]`) is also `Err` here; [`first_bad_book`] lets it through
+/// where typed entry turns it into a link (`Workbook::link_typed_books`).
 fn sheet_book(s: &str) -> std::result::Result<Option<usize>, String> {
     if !s.contains(['[', ']']) {
         return Ok(None);
@@ -227,8 +230,9 @@ fn sheets_named(e: &gridcraft_formula::Expr) -> Vec<(&str, bool)> {
 }
 
 /// The first workbook prefix in `expr` that isn't `[0]` or one of `links` linked workbooks
-/// (`[1]` is the first), as written (`[5]`, `[Book2.xlsx]`).
-fn first_bad_book(expr: &gridcraft_formula::Expr, links: usize) -> Option<String> {
+/// (`[1]` is the first), as written (`[5]`, `[Book2]`). With `typed`, a workbook typed by file
+/// name or path (`[Book2.xlsx]Sheet1`) is fine: entry makes it a link.
+fn first_bad_book(expr: &gridcraft_formula::Expr, links: usize, typed: bool) -> Option<String> {
     let mut bad = None;
     expr.walk(&mut |e| {
         for (s, range_end) in sheets_named(e) {
@@ -239,6 +243,7 @@ fn first_bad_book(expr: &gridcraft_formula::Expr, links: usize) -> Option<String
                 Ok(None) => None,
                 Ok(Some(n)) if n <= links && !range_end => None,
                 Ok(Some(_)) => s.find(']').and_then(|i| s.get(..=i)).map(str::to_string),
+                Err(_) if typed && !range_end && gridcraft_model::links::typed_book(s).is_some() => None,
                 Err(prefix) => Some(prefix),
             };
         }
@@ -251,7 +256,7 @@ fn first_bad_book(expr: &gridcraft_formula::Expr, links: usize) -> Option<String
 /// can't be opened. `[0]` is this workbook, as in Excel: `[0]Sheet1!A1` is entered as `Sheet1!A1`.
 pub(crate) fn check_linked_books(expr: gridcraft_formula::Expr, links: usize) -> Result<gridcraft_formula::Expr> {
     use gridcraft_formula::{Expr, SheetSel};
-    if let Some(book) = first_bad_book(&expr, links) {
+    if let Some(book) = first_bad_book(&expr, links, true) {
         return Err(EngineError::Other(format!("There's a problem with this formula: {book} isn't a linked workbook.")));
     }
     let own = |s: &str| match sheet_book(s) {
@@ -286,7 +291,7 @@ pub(crate) fn check_linked_books(expr: gridcraft_formula::Expr, links: usize) ->
 /// those dialogs. Text that isn't a formula is left to the caller.
 pub(crate) fn refuse_linked_books(text: &str) -> Result<()> {
     match gridcraft_formula::parse(text.trim_start_matches('=')) {
-        Ok(e) if first_bad_book(&e, 0).is_some() => {
+        Ok(e) if first_bad_book(&e, 0, false).is_some() => {
             Err(EngineError::Other("There's a problem with this formula: references to other workbooks can't be used here.".into()))
         }
         _ => Ok(()),
@@ -307,7 +312,7 @@ fn shared_links(src: &gridcraft_model::Workbook, dst: &gridcraft_model::Workbook
 /// different workbook.
 fn drop_linked_books(expr: gridcraft_formula::Expr, shared: &[bool]) -> gridcraft_formula::Expr {
     use gridcraft_formula::Expr;
-    if shared.iter().all(|&s| s) && first_bad_book(&expr, shared.len()).is_none() {
+    if shared.iter().all(|&s| s) && first_bad_book(&expr, shared.len(), false).is_none() {
         return expr;
     }
     expr.map(&mut |e| {
