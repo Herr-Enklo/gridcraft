@@ -976,9 +976,24 @@ fn query_names(app: &SheetApp) -> Vec<String> {
     app.session.active().map(|d| d.wb.queries.iter().map(|q| q.name.clone()).collect()).unwrap_or_default()
 }
 
-/// Columns of a stored query (from a preview of no rows).
-fn query_columns(app: &mut SheetApp, name: &str) -> Vec<String> {
-    app.session.run("query.preview", json!({"name": name, "rows": 0})).ok().map(|p| strings(&p["columns"])).unwrap_or_default()
+/// Columns worked out once per key and kept in egui's memory, so an open dialog doesn't evaluate
+/// a query every frame.
+fn remembered_columns(ui: &Ui, key: &str, compute: impl FnOnce() -> Vec<String>) -> Vec<String> {
+    let id = egui::Id::new(("pq_columns", key));
+    if let Some(v) = ui.ctx().data(|d| d.get_temp::<Vec<String>>(id)) {
+        return v;
+    }
+    let v = compute();
+    ui.ctx().data_mut(|d| d.insert_temp(id, v.clone()));
+    v
+}
+
+/// Columns of a stored query (from a preview of no rows), for this revision of the workbook.
+fn query_columns(app: &mut SheetApp, ui: &Ui, name: &str) -> Vec<String> {
+    let revision = app.session.active().map(|d| (d.uid, d.revision)).unwrap_or_default();
+    remembered_columns(ui, &format!("{name}#{revision:?}"), || {
+        app.session.run("query.preview", json!({"name": name, "rows": 0})).ok().map(|p| strings(&p["columns"])).unwrap_or_default()
+    })
 }
 
 fn combo(ui: &mut Ui, id: &str, current: &str, options: &[String]) -> Option<String> {
@@ -1045,14 +1060,14 @@ fn merge_queries(app: &mut SheetApp, ui: &mut Ui, d: &mut Dialog, open: &mut boo
         d.values.insert("left".into(), json!(p));
         left_cols.clear();
     }
-    let lc = if left.is_empty() { vec![] } else { query_columns(app, &left) };
+    let lc = if left.is_empty() { vec![] } else { query_columns(app, ui, &left) };
     column_picker(ui, "pq_merge_lc", &lc, &mut left_cols);
     let right = v(d, "right");
     if let Some(p) = combo(ui, "pq_merge_right", &right, &names) {
         d.values.insert("right".into(), json!(p));
         right_cols.clear();
     }
-    let rc = if right.is_empty() { vec![] } else { query_columns(app, &right) };
+    let rc = if right.is_empty() { vec![] } else { query_columns(app, ui, &right) };
     column_picker(ui, "pq_merge_rc", &rc, &mut right_cols);
     ui.label(lang.tr("Join Kind"));
     let mut join = v(d, "join");
@@ -2309,8 +2324,10 @@ fn sub_dialog(app: &mut SheetApp, ctx: &egui::Context, ed: &mut Editor) -> bool 
                 let rc = if query.is_empty() {
                     vec![]
                 } else {
-                    let def = ed.drafts.iter().find(|d| s(&d.def, "name") == query.as_str()).map(|d| d.def.clone());
-                    def.and_then(|def| app.session.run("query.preview", json!({"query": def, "rows": 0})).ok()).map(|p| strings(&p["columns"])).unwrap_or_default()
+                    let def = ed.drafts.iter().find(|d| s(&d.def, "name") == query.as_str()).map(|d| d.def.clone()).unwrap_or(Json::Null);
+                    remembered_columns(ui, &def.to_string(), || {
+                        app.session.run("query.preview", json!({"query": def, "rows": 0})).ok().map(|p| strings(&p["columns"])).unwrap_or_default()
+                    })
                 };
                 column_picker(ui, "pq_m_r", &rc, right);
                 ui.label(lang.tr("Join Kind"));

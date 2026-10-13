@@ -510,6 +510,17 @@ fn table_rename(s: &mut Session, p: &Json) -> Result<Json> {
                 }
             }
         }
+        // Queries that load into the table, or read it, follow too.
+        for q in cx.wb.queries.iter_mut() {
+            if q.load.table.as_deref().is_some_and(|t| t.eq_ignore_ascii_case(&old)) {
+                q.load.table = Some(name.clone());
+            }
+            if let gridcraft_model::QuerySource::CurrentWorkbook { name: n } = &mut q.source
+                && n.eq_ignore_ascii_case(&old)
+            {
+                n.clone_from(&name);
+            }
+        }
         cx.structural = true;
         Ok(Json::Null)
     })

@@ -644,6 +644,9 @@ fn fit_to_range(v: Value, range: RangeRef) -> Value {
 
 /// Most distinct URLs WEBSERVICE fetches in one pass.
 const MAX_WEB_CALLS: usize = 1_000;
+/// Failed fetches after which a pass stops asking the network (an unreachable host would
+/// otherwise cost a full timeout per URL).
+const MAX_WEB_FAILURES: usize = 5;
 /// Longest text WEBSERVICE returns (a cell's limit).
 const MAX_WEB_TEXT: usize = 32_767;
 
@@ -656,7 +659,8 @@ impl Host for PassHost<'_> {
             return r.clone();
         }
         let Some(web) = self.web.clone() else { return Err(CellError::Value) };
-        if self.web_cache.len() >= MAX_WEB_CALLS {
+        let failures = self.web_cache.iter().filter(|(_, r)| r.is_err()).count();
+        if self.web_cache.len() >= MAX_WEB_CALLS || failures >= MAX_WEB_FAILURES {
             return Err(CellError::Value);
         }
         let r = match (web.0)(url) {
