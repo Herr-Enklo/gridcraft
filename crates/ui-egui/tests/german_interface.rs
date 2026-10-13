@@ -114,6 +114,20 @@ fn english_typing_is_unchanged() {
 }
 
 #[test]
+fn other_formula_languages_keep_en_us_numbers_and_use_their_words() {
+    // Spanish has a formula table but no observed regional format yet.
+    let mut app = app("es");
+    assert!(enter(&mut app, "A1", "1,5"));
+    assert_eq!(value(&app, "A1"), Value::Number(1.5));
+    assert_eq!(edit_text(&mut app, "A1"), "1.5");
+    assert!(enter(&mut app, "A2", "verdadero"));
+    assert_eq!(value(&app, "A2"), Value::Bool(true));
+    assert_eq!(edit_text(&mut app, "A2"), "VERDADERO");
+    assert!(enter(&mut app, "A3", "10/13/2026"));
+    assert_eq!(edit_text(&mut app, "A3"), "10/13/2026");
+}
+
+#[test]
 fn use_system_separators_is_a_preference_not_a_workbook_setting() {
     let mut app = app("de");
     assert_eq!(app.run("options.separators", json!({})).unwrap(), json!({"useSystem": true, "decimal": ",", "thousands": "."}));

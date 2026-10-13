@@ -126,7 +126,11 @@ pub fn edit_text_in(wb: &Workbook, sheet: &Sheet, c: CellRef, loc: &DisplayLocal
     if let Some(word) = loc.word(&cell.value) {
         return word.to_string();
     }
+    // Only the words differ when numbers are canonical (Spanish, Portuguese, Russian for now).
     let Value::Number(n) = &cell.value else { return edit_text(wb, sheet, c) };
+    if loc.number.is_canonical() {
+        return edit_text(wb, sheet, c);
+    }
     let n = *n;
     let raw = || {
         let text = Value::Number(n).display();

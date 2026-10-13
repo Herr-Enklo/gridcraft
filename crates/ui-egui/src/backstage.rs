@@ -982,10 +982,13 @@ fn options(app: &mut SheetApp, ui: &mut Ui) {
     egui::Grid::new("backstage_options_separators").num_columns(2).spacing(vec2(18.0, 8.0)).show(ui, |ui| {
         for (key, label, current) in [("decimal", "Decimal separator:", shown.decimal), ("thousands", "Thousands separator:", shown.thousands)] {
             ui.label(lang.tr(label));
+            // The field holds the separator in effect; a character typed into it replaces it.
             let mut text = current.to_string();
-            let field = egui::TextEdit::singleline(&mut text).char_limit(1).desired_width(28.0);
-            if ui.add_enabled(!use_system, field).changed() && text.chars().count() == 1 {
-                app.run_or_alert("options.separators", json!({"useSystem": false, key: text}));
+            let field = egui::TextEdit::singleline(&mut text).desired_width(28.0);
+            if ui.add_enabled(!use_system, field).changed()
+                && let Some(typed) = text.chars().find(|c| *c != current)
+            {
+                app.run_or_alert("options.separators", json!({"useSystem": false, key: typed.to_string()}));
             }
             ui.end_row();
         }

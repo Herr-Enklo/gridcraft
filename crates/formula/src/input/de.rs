@@ -5,7 +5,8 @@
 //! its automation interface, in synthetic workbooks that were never saved: every function
 //! GridCraft knows (and GETPIVOTDATA, IMAGE, TRANSLATE and DETECTLANGUAGE, which it doesn't yet)
 //! was entered in canonical form (`Range.Formula2`) and read back as German Excel shows it
-//! (`Range.Formula2Local`). Never copied from a string table or a help page. The 99 functions not
+//! (`Range.Formula2Local`); a Data › What-If Analysis › Data Table showed its `TABLE` formula as
+//! `{=MEHRFACHOPERATION(B1;B2)}`. Never copied from a string table or a help page. The 99 functions not
 //! listed kept their English name there, among them ABS, ASC, BAHTTEXT, the BESSEL functions,
 //! CODE, COS, FILTER, INDEX, LAMBDA, LET, MAP, MAX, MIN, REDUCE, SCAN, TEXT and USDOLLAR.
 //!
@@ -410,6 +411,7 @@ pub(super) const DIALECT: Dialect = Dialect {
         ("T.DIST.2T", "T.VERT.2S"),
         ("T.DIST.RT", "T.VERT.RE"),
         ("T.INV.2T", "T.INV.2S"),
+        ("TABLE", "MEHRFACHOPERATION"),
         ("TAKE", "ÜBERNEHMEN"),
         ("TANH", "TANHYP"),
         ("TBILLEQ", "TBILLÄQUIV"),

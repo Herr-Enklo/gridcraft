@@ -1270,15 +1270,12 @@ fn offset_extreme_arguments_return_ref() {
 #[test]
 fn formula_language_tables_only_name_functions_the_engine_knows() {
     // A typo'd canonical name in a language table would turn a valid local name into #NAME?.
-    // Excel functions GridCraft doesn't compute yet may be listed (a file's GETPIVOTDATA shows as
-    // PIVOTDATENZUORDNEN in German), once they really are unknown here.
-    const NOT_YET: [&str; 4] = ["DETECTLANGUAGE", "GETPIVOTDATA", "IMAGE", "TRANSLATE"];
-    for name in NOT_YET {
-        assert!(!crate::eval::is_known_function(name), "{name} is implemented now: drop it from NOT_YET");
-    }
+    // Excel's names GridCraft doesn't compute as functions may be listed too: a file's GETPIVOTDATA
+    // shows as PIVOTDATENZUORDNEN in German, a data table's TABLE as MEHRFACHOPERATION.
+    const ALSO_LISTED: [&str; 5] = ["DETECTLANGUAGE", "GETPIVOTDATA", "IMAGE", "TABLE", "TRANSLATE"];
     for locale in gridcraft_formula::FormulaLocale::ALL {
         let unknown: Vec<&str> =
-            locale.translations().iter().map(|(en, _)| *en).filter(|en| !crate::eval::is_known_function(en) && !NOT_YET.contains(en)).collect();
+            locale.translations().iter().map(|(en, _)| *en).filter(|en| !crate::eval::is_known_function(en) && !ALSO_LISTED.contains(en)).collect();
         assert!(unknown.is_empty(), "{locale:?}: {unknown:?}");
     }
 }

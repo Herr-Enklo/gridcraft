@@ -313,7 +313,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save the sheet as a PDF document that keeps its page layout." => "Speichert das Blatt als PDF-Dokument mit unverändertem Seitenlayout.",
         "Change File Type" => "Dateityp ändern",
         "CSV (Comma delimited)" => "CSV (Trennzeichen-getrennt)",
-        "Save the active sheet as comma-separated text." => "Speichert das aktive Blatt als durch Kommas getrennten Text.",
+        "Save the active sheet as comma-separated text." => "Speichert das aktive Blatt als durch Trennzeichen getrennten Text.",
         "Web Page (.html)" => "Webseite (.html)",
         "Save the workbook as a web page." => "Speichert die Arbeitsmappe als Webseite.",
         "Options|General" => "Allgemein",

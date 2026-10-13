@@ -4,7 +4,7 @@
 //! observed black-box through its automation interface on 2026-10-13 (`Range.Formula2` in,
 //! `Range.Formula2Local` out), in synthetic workbooks that were never saved. Every function
 //! GridCraft knows is here, with GETPIVOTDATA, IMAGE, TRANSLATE and DETECTLANGUAGE, which Excel
-//! knows and GridCraft doesn't yet.
+//! knows and GridCraft doesn't yet, and the `TABLE` formula of a data table (`Range.Table`).
 use gridcraft_formula::FormulaLocale::{self, De};
 use gridcraft_formula::{parse, parse_input, print, print_input};
 
@@ -463,6 +463,8 @@ const FUNCTIONS: &[(&str, &str)] = &[
     ("T.INV(1,1)", "T.INV(1;1)"),
     ("T.INV.2T(1,1)", "T.INV.2S(1;1)"),
     ("T.TEST(1,1,1,1)", "T.TEST(1;1;1;1)"),
+    // Data › What-If Analysis › Data Table (two inputs), shown as `{=MEHRFACHOPERATION(B1;B2)}`.
+    ("TABLE(B1,B2)", "MEHRFACHOPERATION(B1;B2)"),
     ("TAKE(1,1)", "ÜBERNEHMEN(1;1)"),
     ("TAN(1)", "TAN(1)"),
     ("TANH(1)", "TANHYP(1)"),
@@ -574,6 +576,8 @@ const SYNTAX: &[(&str, &str)] = &[
     ("ERROR.TYPE(FILTER({1;2},{FALSE;FALSE}))", "FEHLER.TYP(FILTER({1;2};{FALSCH;FALSCH}))"),
     ("LAMBDA(x,x)", "LAMBDA(x;x)"),
     ("INDIRECT(\"Z1S1\",FALSE)", "INDIREKT(\"Z1S1\";FALSCH)"),
+    // A one-input data table.
+    ("TABLE(,B1)", "MEHRFACHOPERATION(;B1)"),
 ];
 
 fn canonical(german: &str) -> String {
@@ -611,7 +615,7 @@ fn the_observation_covers_every_function_the_table_lists() {
         let (_, shown) = call.unwrap_or_else(|| panic!("{en} was not observed"));
         assert!(shown.starts_with(&format!("{local}(")), "{en}: table {local}, Excel {shown}");
     }
-    assert_eq!(FUNCTIONS.len(), 518);
+    assert_eq!(FUNCTIONS.len(), 519);
 }
 
 #[test]
