@@ -1532,3 +1532,33 @@ fn data_tables_leave_the_calculation_as_they_found_it() {
     t.set("B3", "4");
     assert_eq!((t.num("H2"), t.num("H3")), (40.0, 20.0));
 }
+
+/// A data table's results are formula cells in Excel, so a dynamic array can't spill over them,
+/// even while they're blank; it can spill along the table's edges, and the table follows the
+/// spilled input values (both found by the command-sequence fuzz).
+#[test]
+fn dynamic_arrays_and_data_tables() {
+    let full = |t: &T| {
+        let mut wb = t.wb.clone();
+        Calc::new().recalc_all(&mut wb);
+        wb
+    };
+    let mut t = T::new();
+    t.set("B1", "2");
+    t.wb.sheet_mut(0).unwrap().data_tables.push(table("K20:M22", None, Some("B1")));
+    t.calc.recalc_all(&mut t.wb);
+    t.set("K19", "=SEQUENCE(5,2)");
+    assert_eq!(t.get("K19"), Value::Error(CellError::Spill));
+    assert_eq!(full(&t).sheet(0).unwrap().value(c("K19")), Value::Error(CellError::Spill));
+    // Down the left edge: the spilled values are the table's input values.
+    t.set("L20", "=B1*10");
+    t.set("K19", "=SEQUENCE(4)");
+    assert_eq!((t.num("K22"), t.num("L21"), t.num("L22")), (4.0, 30.0, 40.0));
+    t.set("K19", "=SEQUENCE(4,1,5)");
+    assert_eq!((t.num("L21"), t.num("L22")), (70.0, 80.0));
+    let fresh = full(&t);
+    assert_eq!((fresh.sheet(0).unwrap().value(c("L21")), fresh.sheet(0).unwrap().value(c("L22"))), (Value::Number(70.0), Value::Number(80.0)));
+    // The spill shrinks off the edge: the input values are blank again.
+    t.set("K19", "=SEQUENCE(2)");
+    assert_eq!((t.num("L21"), t.num("L22")), (0.0, 0.0));
+}

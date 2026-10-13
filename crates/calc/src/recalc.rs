@@ -443,8 +443,9 @@ impl<'a> PassHost<'a> {
 }
 
 /// Whether an array result at `k` can't spill: it is in a table, or its area runs off the sheet,
-/// overlaps merged cells, holds other cells, or another formula's spill (unless that formula is
-/// recalculated in this pass, and so may spill elsewhere now).
+/// overlaps merged cells or a data table's results (formula cells in Excel, even while blank),
+/// holds other cells, or another formula's spill (unless that formula is recalculated in this
+/// pass, and so may spill elsewhere now).
 fn spill_blocked(host: &PassHost<'_>, (sheet, anchor): Key, a: &Array) -> bool {
     let Some(sh) = host.wb.sheet(sheet) else { return false };
     let end =
@@ -459,6 +460,7 @@ fn spill_blocked(host: &PassHost<'_>, (sheet, anchor): Key, a: &Array) -> bool {
         || end.col >= gridcraft_core::MAX_COLS
         || sh.merges.iter().any(|m| m.intersects(&range))
         || sh.tables.iter().any(|t| t.range.contains(anchor))
+        || sh.data_tables.iter().any(|t| t.body().is_some_and(|b| b.intersects(&range)))
         || sh.cells.iter_range(range).any(|(c, cell)| c != anchor && (!cell.value.is_empty() || cell.formula.is_some()))
         || sh.spill.range(range.start..=range.end).any(|(c, _)| range.contains(*c) && spilled_over(*c))
 }
@@ -922,9 +924,14 @@ impl Calc {
         // Data tables whose edges changed are calculated after the formulas (not in Automatic
         // Except for Data Tables mode, where they wait for F9).
         let tables = !self.in_trial && wb.calc.mode == CalcMode::Automatic && wb.sheets.iter().any(|s| !s.data_tables.is_empty());
-        let trigger: Option<HashSet<Key>> = tables.then(|| changed.iter().chain(dirty.iter()).copied().collect());
+        let mut trigger: Option<Changes> = tables.then(|| Changes {
+            cells: changed.iter().chain(dirty.iter()).copied().collect(),
+            spills: cleared.iter().copied().chain(spill_areas(wb, &dirty)).collect(),
+        });
+        let anchors: Vec<Key> = if tables { dirty.clone() } else { Vec::new() };
         self.run(wb, dirty, false);
-        if let Some(t) = trigger {
+        if let Some(mut t) = trigger.take() {
+            t.spills.extend(spill_areas(wb, &anchors));
             self.refresh_tables(wb, Some(t));
         }
         if profiling() && !self.in_trial {
@@ -1044,7 +1051,8 @@ impl Calc {
                         || end.col >= gridcraft_core::MAX_COLS
                         || range.iter().any(|c| c != k.1 && (sheet.cells.has(c) || sheet.spill.contains_key(&c)))
                         || sheet.merges.iter().any(|m| m.intersects(&range))
-                        || sheet.tables.iter().any(|t| t.range.contains(k.1));
+                        || sheet.tables.iter().any(|t| t.range.contains(k.1))
+                        || sheet.data_tables.iter().any(|t| t.body().is_some_and(|b| b.intersects(&range)));
                     if blocked {
                         if let Some(cell) = sheet.cells.get_mut(k.1) {
                             cell.value = Value::Error(CellError::Spill);
@@ -1155,6 +1163,34 @@ fn substitute(calc: &mut Calc, wb: &mut Workbook, sets: &[(usize, CellRef, Value
     reads.iter().map(|(si, c)| wb.sheet(*si).map(|s| s.value(*c)).unwrap_or_default()).collect()
 }
 
+/// What a recalculation changed, for [`Calc::refresh_tables`]: cells whose content or value
+/// changed, and the areas dynamic arrays spilled over before and after it (their values changed
+/// too, without being formulas).
+struct Changes {
+    cells: HashSet<Key>,
+    spills: Vec<(usize, RangeRef)>,
+}
+
+impl Changes {
+    fn contains(&self, si: usize, c: CellRef) -> bool {
+        self.cells.contains(&(si, c)) || self.spills.iter().any(|(s, r)| *s == si && r.contains(c))
+    }
+
+    /// Whether a change is on `t`'s top row or left column.
+    fn touches(&self, si: usize, t: &DataTable) -> bool {
+        let r = t.range;
+        let top = RangeRef::new(r.start, CellRef::new(r.start.row, r.end.col));
+        let left = RangeRef::new(r.start, CellRef::new(r.end.row, r.start.col));
+        self.cells.iter().any(|(s, c)| *s == si && t.is_edge(*c))
+            || self.spills.iter().any(|(s, a)| *s == si && (a.intersects(&top) || a.intersects(&left)))
+    }
+}
+
+/// The areas the formulas in `keys` spill over now.
+fn spill_areas(wb: &Workbook, keys: &[Key]) -> Vec<(usize, RangeRef)> {
+    keys.iter().filter_map(|(si, c)| Some((*si, *wb.sheet(*si)?.spill_ranges.get(c)?))).collect()
+}
+
 /// Result cells one refresh of the data tables may calculate, over all tables and passes. Tables
 /// past the budget keep their values until the next refresh (a hostile file can't hang a recalc).
 const MAX_REFRESH_CELLS: u64 = 1_000_000;
@@ -1255,13 +1291,12 @@ impl Calc {
     /// the whole table again; changed input values only their own rows, columns or cells. Results
     /// are written as values and their dependents recalculated; tables that read other tables'
     /// results are calculated again in later passes.
-    fn refresh_tables(&mut self, wb: &mut Workbook, trigger: Option<HashSet<Key>>) {
+    fn refresh_tables(&mut self, wb: &mut Workbook, trigger: Option<Changes>) {
         if self.in_trial {
             return;
         }
-        let triggered = |si: usize, t: &DataTable, tr: &HashSet<Key>| tr.iter().any(|(s, c)| *s == si && t.is_edge(*c));
         if let Some(tr) = &trigger
-            && !wb.sheets.iter().enumerate().any(|(si, sh)| sh.data_tables.iter().any(|t| triggered(si, t, tr)))
+            && !wb.sheets.iter().enumerate().any(|(si, sh)| sh.data_tables.iter().any(|t| tr.touches(si, t)))
         {
             return;
         }
@@ -1285,14 +1320,14 @@ impl Calc {
                 } else {
                     let trials: Vec<TableTrial> = match &trigger {
                         Some(tr) if !was_circular => {
-                            if !triggered(si, t, tr) {
+                            if !tr.touches(si, t) {
                                 continue;
                             }
                             let all = t.trials();
-                            if t.formulas().is_some_and(|f| f.iter().any(|c| tr.contains(&(si, c)))) {
+                            if t.formulas().is_some_and(|f| f.iter().any(|c| tr.contains(si, c))) {
                                 all
                             } else {
-                                all.into_iter().filter(|tt| tt.inputs.iter().any(|(_, from)| tr.contains(&(si, *from)))).collect()
+                                all.into_iter().filter(|tt| tt.inputs.iter().any(|(_, from)| tr.contains(si, *from))).collect()
                             }
                         }
                         _ => t.trials(),
@@ -1321,8 +1356,10 @@ impl Calc {
                 break;
             }
             let dirty = self.dirty_closure(wb, &written);
-            let next: HashSet<Key> = written.iter().chain(dirty.iter()).copied().collect();
+            let mut next = Changes { cells: written.iter().chain(dirty.iter()).copied().collect(), spills: spill_areas(wb, &dirty) };
+            let anchors = dirty.clone();
             self.run(wb, dirty, false);
+            next.spills.extend(spill_areas(wb, &anchors));
             trigger = Some(next);
         }
         if profiling() && substitutions > 0 {
