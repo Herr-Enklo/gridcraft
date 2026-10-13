@@ -660,6 +660,7 @@ fn build_cache(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Option<Cac
     for tl in wb.sheets.iter().flat_map(|s| s.timelines.iter()).filter(|t| t.pivots.contains(&pt.id)) {
         if let Some(cf) = find(&fields, &tl.field).and_then(|i| fields.get_mut(i))
             && cf.group.is_none()
+            && !cf.itemized
             && cf.stats.number
             && !cf.stats.text
             && !cf.stats.boolean
@@ -1093,6 +1094,9 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn
         s.push_str(" showAll=\"0\"");
         if let Some(af) = axis_field(i) {
             match af.sort {
+                // Excel sorts the captions of date groups as text under `sortType`; their own
+                // order is already chronological, so ascending date groups go without it.
+                PivotSort::Asc if f.date_grouped() => {}
                 PivotSort::Asc => s.push_str(" sortType=\"ascending\""),
                 PivotSort::Desc => s.push_str(" sortType=\"descending\""),
                 PivotSort::None => {}
@@ -1760,6 +1764,8 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32, timeline_filte
                     f.sort = match e.attr("sortType") {
                         Some("ascending") => PivotSort::Asc,
                         Some("descending") => PivotSort::Desc,
+                        // Date groups in their own (chronological) order are ascending.
+                        _ if f.date_group != PivotDateGroup::None => PivotSort::Asc,
                         _ => PivotSort::None,
                     };
                     let items = items_of(e);

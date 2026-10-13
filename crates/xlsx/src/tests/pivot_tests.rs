@@ -131,7 +131,8 @@ fn workbook() -> Workbook {
             PivotField {
                 source_col: "Date".into(),
                 date_group: PivotDateGroup::Years,
-                sort: PivotSort::None,
+                // Date groups keep their chronological order: ascending (no `sortType`).
+                sort: PivotSort::Asc,
                 collapsed_items: vec!["2024".into()],
                 ..PivotField::default()
             },
@@ -768,6 +769,9 @@ fn time_levels_bounds_and_day_spans_round_trip() {
         "{c1}"
     );
     assert!(c1.contains("<s v=\"&gt;12/31/2024\"/>"), "{c1}");
+    // Excel sorts date group captions as text under `sortType`: ascending date groups go without it.
+    let t1 = String::from_utf8(parts.get("xl/pivotTables/pivotTable1.xml").unwrap().clone()).unwrap();
+    assert!(t1.contains("numFmtId=\"14\" showAll=\"0\"") && !t1.contains("numFmtId=\"14\" showAll=\"0\" sortType"), "{t1}");
     let c3 = String::from_utf8(parts.get("xl/pivotCache/pivotCacheDefinition3.xml").unwrap().clone()).unwrap();
     assert!(c3.contains("groupBy=\"days\" startDate=\"2024-01-05T00:00:00\" endDate=\"2026-01-01T00:00:00\" groupInterval=\"30\"/>"), "{c3}");
     assert!(c3.contains("<s v=\"1/5/2024 - 2/3/2024\"/>"), "{c3}");
