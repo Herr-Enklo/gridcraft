@@ -1,0 +1,23 @@
+[package]
+name = "gridcraft-external"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "GridCraft native data access for Get & Transform and WEBSERVICE: HTTP(S) requests and, on Windows, ODBC"
+
+[lints]
+workspace = true
+
+[dependencies]
+gridcraft-engine = { workspace = true }
+log = { workspace = true }
+
+# HTTP(S) with rustls (pure-Rust TLS, Mozilla's root certificates): no OpenSSL to install.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ureq = { version = "3.4", default-features = false, features = ["rustls", "gzip"] }
+
+# ODBC through the driver manager Windows ships (odbc32.dll), so From SQL Server Database, From
+# Microsoft Access Database and From ODBC work with the installed drivers. Other platforms would
+# need unixODBC at build time, so they don't get ODBC.
+[target.'cfg(windows)'.dependencies]
+odbc-api = { version = "29.2", default-features = false, features = ["odbc_version_3_80"] }
