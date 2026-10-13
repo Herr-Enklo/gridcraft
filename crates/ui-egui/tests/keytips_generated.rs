@@ -2657,6 +2657,20 @@ fn keytip_jcc_() {
 }
 
 #[test]
+fn keytip_jt_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "JT", false);
+    assert_eq!(h.state().ui.ribbon_tab, "Home", "JT must not switch to the hidden PivotTable Analyze tab");
+}
+
+#[test]
+fn keytip_jy_() {
+    let mut h = harness(blank());
+    sequence(&mut h, "JY", false);
+    assert_eq!(h.state().ui.ribbon_tab, "Home", "JY must not switch to the hidden PivotTable Design tab");
+}
+
+#[test]
 fn keytip_jts_() {
     let mut h = harness(blank());
     sequence(&mut h, "JTS", false);
@@ -2738,7 +2752,7 @@ fn keytip_q_() {
 
 #[test]
 fn generated_test_count_matches_the_table() {
-    const EXPECTED: usize = 364;
+    const EXPECTED: usize = 366;
     assert_eq!(gridcraft_ui_egui::keytips::keytip_table::SEQUENCES.len(), EXPECTED);
 }
 

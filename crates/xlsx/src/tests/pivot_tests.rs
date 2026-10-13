@@ -118,6 +118,7 @@ fn workbook() -> Workbook {
         values_position: None,
         group_fields: vec![],
         calculated_items: vec![],
+        report: Default::default(),
     };
     // Pivot 2: table source, date grouping on two levels, show-values-as, multi-select page
     // filter and a hidden-items filter on a column field.
@@ -193,6 +194,7 @@ fn workbook() -> Workbook {
         values_position: None,
         group_fields: vec![],
         calculated_items: vec![],
+        report: Default::default(),
     };
     // Pivot 3: defaults, defined-name source, compact.
     let p3 = PivotTable {

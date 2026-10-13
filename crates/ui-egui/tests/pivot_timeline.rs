@@ -194,3 +194,37 @@ fn fields_pane_menu_has_label_and_value_filters() {
     assert!(h.query_by_label_contains("Label Filters").is_some());
     assert!(h.query_by_label_contains("Value Filters").is_some());
 }
+
+#[test]
+fn pivottable_analyze_runs_grouping_calculated_items_and_timelines() {
+    let mut s = sales_pivot();
+    // The active cell on East, an item of Region.
+    s.execute("selection.set", json!({"range": "E4"})).unwrap();
+    let mut h = harness(s);
+    h.state_mut().ui.ribbon_tab = gridcraft_ui_egui::ribbon::pivot_tabs::ANALYZE.into();
+    h.run_steps(3);
+    // Group Field opens the Grouping dialog only for number and date fields: Region is text.
+    h.get_by_label("Group Field").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none());
+    h.state_mut().message = None;
+    // Fields, Items, & Sets › Calculated Item… opens Insert Calculated Item for Region.
+    h.get_by_label("Fields, Items, & Sets").click();
+    h.run_steps(3);
+    h.get_by_label("Calculated Item…").click();
+    h.run_steps(3);
+    let d = h.state().dialog.as_ref().map(|d| (d.name().to_string(), d.values.get("field").cloned()));
+    assert_eq!(d, Some(("pivotCalculatedItem".to_string(), Some(json!("Region")))));
+    h.state_mut().dialog = None;
+    // Insert Timeline lists the date fields.
+    h.get_by_label("Insert Timeline").click();
+    h.run_steps(3);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name().to_string()).as_deref(), Some("insertTimeline"));
+    h.state_mut().dialog = None;
+    // Group Selection on East and North.
+    h.state_mut().run("selection.set", json!({"range": "E4,E5"})).unwrap();
+    h.run_steps(2);
+    h.get_by_label("Group Selection").click();
+    h.run_steps(3);
+    assert_eq!(pivot(&h).group_fields.first().map(|g| g.name.as_str()), Some("Region2"));
+}

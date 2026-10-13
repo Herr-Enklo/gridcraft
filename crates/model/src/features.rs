@@ -1390,6 +1390,10 @@ pub struct PivotTable {
     pub group_fields: Vec<PivotGroupField>,
     /// Calculated items, in solve order.
     pub calculated_items: Vec<PivotCalcItem>,
+    /// What each line and data column of the written report stands for (GETPIVOTDATA reads
+    /// it). Written with the report; not saved, rebuilt when a workbook is opened.
+    #[serde(skip)]
+    pub report: crate::PivotReportIndex,
 }
 
 impl PivotTable {
@@ -1433,6 +1437,7 @@ impl Default for PivotTable {
             values_position: None,
             group_fields: vec![],
             calculated_items: vec![],
+            report: Default::default(),
         }
     }
 }

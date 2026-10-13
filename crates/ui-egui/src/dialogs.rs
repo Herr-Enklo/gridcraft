@@ -644,6 +644,62 @@ impl Dialog {
                 vec![Text { key: "name", label: "Name:" }, Text { key: "formula", label: "Formula:" }],
                 json!({"pivot": p("pivot"), "name": p("name"), "formula": p("formula")}),
             ),
+            "pivotChangeSource" => Dialog::form(
+                "pivotChangeSource",
+                "Change PivotTable Data Source",
+                "pivot.changeSource",
+                vec![Text { key: "source", label: "Table/Range:" }],
+                json!({"pivot": p("pivot"), "source": p("source")}),
+            ),
+            "pivotValueFieldSettings" => Dialog::form(
+                "pivotValueFieldSettings",
+                "Value Field Settings",
+                "pivot.valueSettings",
+                vec![
+                    Text { key: "name", label: "Custom Name:" },
+                    Choice {
+                        key: "func",
+                        label: "Summarize value field by",
+                        options: vec![
+                            ("sum", "Sum"),
+                            ("count", "Count"),
+                            ("average", "Average"),
+                            ("max", "Max"),
+                            ("min", "Min"),
+                            ("product", "Product"),
+                            ("countNumbers", "Count Numbers"),
+                            ("stdDev", "StdDev"),
+                            ("stdDevP", "StdDevp"),
+                            ("var", "Var"),
+                            ("varP", "Varp"),
+                        ],
+                    },
+                    Choice {
+                        key: "showAs",
+                        label: "Show values as",
+                        options: vec![
+                            ("normal", "No Calculation"),
+                            ("percentOfGrandTotal", "% of Grand Total"),
+                            ("percentOfColumnTotal", "% of Column Total"),
+                            ("percentOfRowTotal", "% of Row Total"),
+                            ("percentOf", "% Of"),
+                            ("percentOfParentRowTotal", "% of Parent Row Total"),
+                            ("percentOfParentColumnTotal", "% of Parent Column Total"),
+                            ("percentOfParentTotal", "% of Parent Total"),
+                            ("differenceFrom", "Difference From"),
+                            ("percentDifferenceFrom", "% Difference From"),
+                            ("runningTotal", "Running Total In"),
+                            ("percentRunningTotal", "% Running Total In"),
+                            ("rankAscending", "Rank Smallest to Largest"),
+                            ("rankDescending", "Rank Largest to Smallest"),
+                            ("index", "Index"),
+                        ],
+                    },
+                    Text { key: "baseField", label: "Base field:" },
+                    Text { key: "baseItem", label: "Base item:" },
+                ],
+                json!({"pivot": p("pivot"), "field": p("field"), "name": p("name"), "func": p("func"), "showAs": p("showAs"), "baseField": p("baseField"), "baseItem": p("baseItem")}),
+            ),
             "goToSpecial" => Dialog::form(
                 "goToSpecial",
                 "Go To Special",
@@ -944,6 +1000,12 @@ fn data_validation_form(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, o
 
 /// Builds the command params from form values for dialogs that need translation.
 fn build_params(d: &Dialog) -> Json {
+    // Value Field Settings: an empty base field or base item keeps the PivotTable's default.
+    if d.name == "pivotValueFieldSettings" {
+        let mut v = d.values.clone();
+        v.retain(|k, x| !(matches!(k.as_str(), "baseField" | "baseItem") && x.as_str().is_none_or(|t| t.trim().is_empty())));
+        return Json::Object(v);
+    }
     let mut v = Json::Object(d.values.clone());
     match d.name.as_str() {
         "dataValidation" => {
@@ -1441,9 +1503,9 @@ fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                     ui.vertical(|ui| {
                         ui.label(egui::RichText::new(label).strong());
                         let cur = d.values.get(key).and_then(Json::as_str).unwrap_or("").to_string();
-                        if d.name == "dataValidation" {
+                        if matches!(d.name.as_str(), "dataValidation" | "pivotValueFieldSettings") {
                             let selected = options.iter().find(|(val, _)| *val == cur).map(|(_, text)| *text).unwrap_or("");
-                            egui::ComboBox::from_id_salt(("dataValidation", key)).selected_text(selected).width(300.0).show_ui(ui, |ui| {
+                            egui::ComboBox::from_id_salt((d.name.clone(), key)).selected_text(selected).width(300.0).show_ui(ui, |ui| {
                                 for (val, text) in options {
                                     if ui.selectable_label(cur == val, text).clicked() {
                                         d.set_value(key, json!(val));
