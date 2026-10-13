@@ -160,3 +160,36 @@ fn the_tabs_and_their_controls_speak_german() {
         assert!(h.query_by_label(label).is_some(), "Design shows `{label}`");
     }
 }
+
+#[test]
+fn active_field_group_works_on_the_active_cells_field() {
+    let mut h = harness(with_pivot());
+    h.state_mut().run("ui.ribbonTab", json!({"tab": ANALYZE})).unwrap();
+    // B5 is a value of Sum of Sales: Field Settings opens Value Field Settings for it.
+    h.state_mut().run("selection.set", json!({"range": "B5"})).unwrap();
+    h.run_steps(2);
+    click(&mut h, "Field Settings");
+    let dialog = h.state().dialog.as_ref().expect("Value Field Settings opens");
+    assert_eq!(dialog.name(), "pivotValueFieldSettings");
+    assert_eq!(dialog.values["field"], "Sum of Sales");
+    assert_eq!(dialog.values["func"], "sum");
+    h.state_mut().dialog = None;
+    // A4 is the East item of Region: Collapse Field and Expand Field act on Region.
+    h.state_mut().run("selection.set", json!({"range": "A4"})).unwrap();
+    h.run_steps(2);
+    click(&mut h, "Collapse Field");
+    assert_eq!(pivot(&h).rows[0].collapsed_items.len(), 3, "East, North and West");
+    click(&mut h, "Expand Field");
+    assert!(pivot(&h).rows[0].collapsed_items.is_empty());
+    // Select › Values selects the value cells.
+    click(&mut h, "Select");
+    // The Fields pane has a "Values" area too: the menu item is the button.
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Values").click();
+    h.run_steps(2);
+    assert_eq!(h.state().session.active().unwrap().selection.current().a1(), "B4:B12");
+    // Options › Generate GetPivotData switches the setting.
+    assert!(h.state().session.prefs.generate_get_pivot_data);
+    click(&mut h, "PivotTable Options");
+    click(&mut h, "✓ Generate GetPivotData");
+    assert!(!h.state().session.prefs.generate_get_pivot_data);
+}

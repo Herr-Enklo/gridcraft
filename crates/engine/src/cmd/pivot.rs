@@ -188,6 +188,10 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             delete
         ),
+        cmd!(query "pivot.generateGetPivotData", "Generate GetPivotData", ["PivotTable Analyze", "PivotTable", "Options"], None, "{on?: bool} (toggles without it) → {on}: pointing at a PivotTable value while typing a formula inserts GETPIVOTDATA (an application setting, on by default)", always, |s, p| {
+            s.prefs.generate_get_pivot_data = bool_param(p, "on").unwrap_or(!s.prefs.generate_get_pivot_data);
+            Ok(json!({"on": s.prefs.generate_get_pivot_data}))
+        }),
         cmd!(
             "pivot.clearAll",
             "Clear All",
@@ -2352,6 +2356,18 @@ mod tests {
         s.execute("pivot.collapse", json!({"field": "Grp"})).unwrap();
         // 64 Sub items under the collapsed "g" show as one column group: (1 + grand total) x 256 columns fit.
         s.execute("pivot.addField", json!({"field": "Sub", "area": "columns"})).unwrap();
+    }
+
+    #[test]
+    fn generate_getpivotdata_is_a_setting_on_by_default() {
+        let mut s = Session::new();
+        assert!(s.prefs.generate_get_pivot_data);
+        assert_eq!(s.execute("pivot.generateGetPivotData", json!({})).unwrap()["on"], false);
+        assert_eq!(s.execute("pivot.generateGetPivotData", json!({"on": true})).unwrap()["on"], true);
+        assert!(s.journal.is_empty(), "a setting, not an edit of the workbook");
+        // A prefs.json saved before the setting existed keeps it on.
+        let old: crate::Prefs = serde_json::from_str(r#"{"userName": "Ann"}"#).unwrap();
+        assert!(old.generate_get_pivot_data);
     }
 
     #[test]

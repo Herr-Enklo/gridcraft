@@ -300,6 +300,7 @@ pub const CATALOG: &[(&str, &str, &str, &str)] = &[
     ("chart.shapeFill", "Format", "Shape Styles", "Shape Fill"),
     ("chart.shapeOutline", "Format", "Shape Styles", "Shape Outline"),
     // PivotTable Analyze / Design
+    ("pivot.generateGetPivotData", "PivotTable Analyze", "PivotTable", "Generate GetPivotData"),
     ("pivot.fieldList", "PivotTable Analyze", "Show", "Field List"),
     ("pivot.refresh", "PivotTable Analyze", "Data", "Refresh"),
     ("pivot.changeSource", "PivotTable Analyze", "Data", "Change Data Source"),

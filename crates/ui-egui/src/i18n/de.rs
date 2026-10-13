@@ -506,6 +506,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Medium" => "Mittel",
         "Change PivotTable Data Source" => "PivotTable-Datenquelle ändern",
         "Value Field Settings" => "Wertfeldeinstellungen",
+        "Working with formulas" => "Arbeiten mit Formeln",
+        "Use GetPivotData functions for PivotTable references" => "GetPivotData-Funktionen für PivotTable-Bezüge verwenden",
         _ => return None,
     })
 }

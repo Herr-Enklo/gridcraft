@@ -5,7 +5,7 @@
 //! group function.
 
 use egui::{Color32, Rect, RichText, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
-use gridcraft_engine::model::{PivotFunc, PivotLayout, PivotShowAs, PivotTable, Workbook};
+use gridcraft_engine::model::{PivotDateGroup, PivotFunc, PivotLayout, PivotShowAs, PivotTable, ReportPart, Workbook};
 use serde_json::{Value as Json, json};
 
 use super::{act, menu_items, sep};
@@ -120,14 +120,20 @@ fn pivottable_group(app: &mut SheetApp, ui: &mut Ui, pt: &PivotTable) {
         egui::Popup::menu(&options).show(|ui| {
             unavailable_item(ui, "Options…", NOT_YET);
             unavailable_item(ui, "Show Report Filter Pages…", NOT_YET);
-            unavailable_item(ui, "Generate GetPivotData", NOT_YET);
+            // A setting of GridCraft, as in Excel: clicking a value of a PivotTable while
+            // typing a formula inserts GETPIVOTDATA instead of the cell's reference.
+            let on = app.session.prefs.generate_get_pivot_data;
+            let text = if on { format!("✓ {}", lang.tr("Generate GetPivotData")) } else { format!("    {}", lang.tr("Generate GetPivotData")) };
+            if ui.add(egui::Button::new(text).frame(false).min_size(vec2(220.0, 22.0))).clicked() {
+                act(app, "pivot.generateGetPivotData", json!({"on": !on}));
+                ui.close();
+            }
         });
     });
 }
 
 /// What the active cell of a PivotTable stands for, for the Active Field group.
 #[derive(Clone, Debug, PartialEq)]
-#[allow(dead_code)] // Built once the report's layout is indexed (see `active_field_of`).
 enum ActiveField {
     /// A value field: its caption ("Sum of Sales").
     Value(String),
@@ -135,9 +141,23 @@ enum ActiveField {
     Axis(String, bool),
 }
 
-/// The field of the active cell. Needs the report's layout, which isn't known here yet.
-fn active_field_of(_app: &SheetApp, _pt: &PivotTable) -> Option<ActiveField> {
-    None
+/// The field of the active cell: a value cell's value field, or the row or column field of an
+/// item label (read off the report's index).
+fn active_field_of(app: &SheetApp, pt: &PivotTable) -> Option<ActiveField> {
+    let report = pt.report.get()?;
+    let origin = pt.last_range?.start;
+    let a = app.session.active()?.selection.active;
+    let part = report.part_at(a.row.checked_sub(origin.row)?, a.col.checked_sub(origin.col)?)?;
+    let axis = |fields: &[gridcraft_engine::model::ReportField], defs: &[gridcraft_engine::model::PivotField], f: u32| {
+        let name = fields.get(f as usize)?.name.clone();
+        let grouped = defs.iter().find(|d| d.source_col.eq_ignore_ascii_case(&name)).is_some_and(|d| d.date_group != PivotDateGroup::None);
+        Some(ActiveField::Axis(name, grouped))
+    };
+    match part {
+        ReportPart::Data(d) => Some(ActiveField::Value(report.data_fields.get(d as usize)?.name.clone())),
+        ReportPart::RowField(f) => axis(&report.row_fields, &pt.rows, f),
+        ReportPart::ColField(f) => axis(&report.col_fields, &pt.columns, f),
+    }
 }
 
 /// `pivot.valueSettings`'s name for a summary function.
@@ -290,7 +310,12 @@ fn actions_group(app: &mut SheetApp, ui: &mut Ui, pt: &PivotTable) {
                 }
             };
             pick(app, ui, "Labels and Values", body);
-            unavailable_item(ui, "Values", NOT_YET);
+            // The value cells, totals included.
+            let values = pt.report.get().and_then(|r| r.data_area()).zip(whole).and_then(|((r0, c0, r1, c1), w)| {
+                let at = |r: u32, c: u32| Some(gridcraft_engine::core::CellRef::new(w.start.row.checked_add(r)?, w.start.col.checked_add(c)?));
+                Some(gridcraft_engine::core::RangeRef::new(at(r0, c0)?, at(r1, c1)?))
+            });
+            pick(app, ui, "Values", values);
             unavailable_item(ui, "Labels", NOT_YET);
             ui.separator();
             pick(app, ui, "Entire PivotTable", whole);
