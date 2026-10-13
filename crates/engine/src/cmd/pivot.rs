@@ -3006,6 +3006,24 @@ mod tests {
             "pivot.refresh",
             "data.refreshAll",
             "pivot.changeSource",
+            "pivot.groupSelection",
+            "pivot.ungroup",
+            "pivot.calculatedItem",
+            "pivot.solveOrder",
+            "pivot.listFormulas",
+            "insert.timeline",
+            "pivot.insertTimeline",
+            "timeline.select",
+            "timeline.clear",
+            "timeline.level",
+            "timeline.scroll",
+            "timeline.caption",
+            "timeline.reportConnections",
+            "timeline.style",
+            "timeline.size",
+            "timeline.showHeader",
+            "timeline.periods",
+            "timeline.delete",
             "pivot.delete",
         ];
         let hostile = [
@@ -3021,6 +3039,12 @@ mod tests {
             json!({"field": "Date", "by": "decades", "items": "nope", "order": "sideways"}),
             json!({"field": "Region", "op": "between", "value": 1e308, "value2": "x", "count": -1, "by": "sum", "top": "x", "valueField": 7}),
             json!({"field": "Region", "op": "notBetween", "value": ["x"], "count": 1e300, "by": "percent", "valueField": "nope"}),
+            json!({"field": "Date", "by": ["days", "hours", 7, null], "days": 4294967296u64, "start": "x", "end": -1e308, "items": [1, null]}),
+            json!({"field": "Date", "by": "days", "days": 32767, "start": 0, "end": 2958465}),
+            json!({"field": "Region", "items": ["East", "North"], "name": "", "formula": "=East[", "order": [null], "move": "sideways"}),
+            json!({"field": "Region", "name": "x".repeat(300), "formula": format!("={}", "East+".repeat(5000)), "delete": "yes"}),
+            json!({"timeline": -1, "start": "1/1/9999", "end": "1/1/1900", "level": "eons", "to": 1e300, "caption": 5, "pivots": ["Nope", 3]}),
+            json!({"timeline": "Date", "style": "x".repeat(100), "width": f64::NAN, "height": -5, "on": "maybe", "fields": ["Date", "Date", 9]}),
         ];
         for c in cmds {
             for h in &hostile {

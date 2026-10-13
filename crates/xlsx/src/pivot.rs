@@ -322,8 +322,12 @@ impl PivotWriter {
     pub fn add_sheet(&mut self, wb: &Workbook, si: usize, out: &mut Out, rels: &mut Rels) {
         let Some(sheet) = wb.sheet(si) else { return };
         for (idx, pt) in sheet.pivots.iter().enumerate() {
-            let Some(cache) = build_cache(wb, pt, si) else { continue };
+            let Some(mut cache) = build_cache(wb, pt, si) else { continue };
             let n = self.caches.len() as u32 + 1;
+            // A timeline cache refers to the pivot cache of the PivotTable it lists by this id.
+            if wb.sheets.iter().flat_map(|s| s.timelines.iter()).any(|t| t.pivots.first() == Some(&pt.id)) {
+                cache.ext_id = Some(n);
+            }
             let cache_part = format!("xl/pivotCache/pivotCacheDefinition{n}.xml");
             let rec_rid = if let Some((count, xml)) = &cache.records {
                 let mut r = Rels::default();
@@ -379,11 +383,32 @@ impl PivotWriter {
         v
     }
 
+    /// The pivot cache id of the PivotTable at (sheet, index), if it was written.
+    pub fn cache_id(&self, sheet: usize, idx: usize) -> Option<u32> {
+        self.pending.iter().find(|p| p.sheet == sheet && p.idx == idx).map(|p| p.cache_id)
+    }
+
+    /// The first and last number of source field `field` of the PivotTable at (sheet, index).
+    pub fn bounds(&self, sheet: usize, idx: usize, field: &str) -> Option<(f64, f64)> {
+        let p = self.pending.iter().find(|p| p.sheet == sheet && p.idx == idx)?;
+        let f = p.cache.fields.iter().find(|f| f.col.is_some() && same(&f.name, field))?;
+        f.stats.number.then_some((f.stats.min, f.stats.max))
+    }
+
     /// Writes the PivotTable parts. `fmt_id` maps a number format code to its styles id.
     pub fn finish(self, wb: &Workbook, out: &mut Out, fmt_id: &dyn Fn(&str) -> Option<u32>) {
         for p in self.pending {
             let Some(pt) = wb.sheet(p.sheet).and_then(|s| s.pivots.get(p.idx)) else { continue };
-            let xml = table_xml(pt, p.idx, p.cache_id, &p.cache, fmt_id);
+            // The selections of the timelines filtering this PivotTable.
+            let timeline_filters: Vec<String> = crate::timeline::filters_of(wb, pt.id)
+                .into_iter()
+                .zip(crate::timeline::FILTER_ID_BASE..)
+                .filter_map(|(t, id)| {
+                    let fld = p.cache.fields.iter().position(|f| f.col.is_some() && same(&f.name, &t.field))?;
+                    Some(crate::timeline::filter_xml(fld, id, t))
+                })
+                .collect();
+            let xml = table_xml(pt, p.idx, p.cache_id, &p.cache, fmt_id, &timeline_filters);
             out.part(&p.part, Some(CT_PIVOT_TABLE), xml.into_bytes());
         }
     }
@@ -931,7 +956,7 @@ fn cache_xml(c: &Cache, records_rid: Option<&str>, sys: DateSystem) -> String {
     s
 }
 
-fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn Fn(&str) -> Option<u32>) -> String {
+fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn Fn(&str) -> Option<u32>, extra_filters: &[String]) -> String {
     let nf = c.fields.len();
     let find_db = |name: &str| c.fields.iter().position(|f| f.col.is_some() && same(&f.name, name));
     let find_page = |name: &str| {
@@ -1191,7 +1216,7 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn
         let _ = write!(s, " name=\"{}\"", esc_attr(&pt.style));
     }
     s.push_str(" showRowHeaders=\"1\" showColHeaders=\"1\" showRowStripes=\"0\" showColStripes=\"0\" showLastColumn=\"1\"/>");
-    filters_xml(&mut s, pt, &c.axis_map, &vals);
+    filters_xml(&mut s, pt, &c.axis_map, &vals, extra_filters);
     s.push_str("</pivotTableDefinition>");
     s
 }
@@ -1245,7 +1270,7 @@ fn custom_filters(op: PivotCompare, a: &str, b: &str) -> String {
 
 /// `<filters>`: the label, value and Top 10 filters of the row and column fields. `fld` is the
 /// cache field and `iMeasureFld` the position of the value field in `<dataFields>`.
-fn filters_xml(s: &mut String, pt: &PivotTable, axis_map: &[Option<usize>], vals: &[(usize, &PivotValue)]) {
+fn filters_xml(s: &mut String, pt: &PivotTable, axis_map: &[Option<usize>], vals: &[(usize, &PivotValue)], extra: &[String]) {
     let measure = |name: &str| vals.iter().position(|(_, v)| same(&v.name, name));
     let mut out = String::new();
     let mut n = 0;
@@ -1287,6 +1312,11 @@ fn filters_xml(s: &mut String, pt: &PivotTable, axis_map: &[Option<usize>], vals
             out,
             "<filter fld=\"{fld}\" type=\"{ty}\" evalOrder=\"-1\" id=\"{n}\"{attrs}><autoFilter ref=\"A1\"><filterColumn colId=\"0\">{inner}</filterColumn></autoFilter></filter>"
         );
+    }
+    // Timelines' date filters come after the label, value and Top 10 filters.
+    for x in extra.iter().filter(|x| !x.is_empty()) {
+        n += 1;
+        out.push_str(x);
     }
     if n > 0 {
         let _ = write!(s, "<filters count=\"{n}\">{out}</filters>");

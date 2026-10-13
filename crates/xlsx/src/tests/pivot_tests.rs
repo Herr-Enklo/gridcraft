@@ -827,3 +827,105 @@ fn calculated_items_and_groups_from_hostile_caches() {
     assert!(report.warnings.iter().any(|w| w.contains("K3")), "{:?}", report.warnings);
     assert!(write_xlsx(&wb).is_ok());
 }
+
+#[test]
+fn timelines_round_trip_with_their_caches_and_pivot_filter() {
+    let mut wb = workbook();
+    let tl = Timeline {
+        id: 50,
+        name: "Date".into(),
+        caption: "Order date".into(),
+        field: "Date".into(),
+        pivots: vec![1],
+        anchor: Anchor { cell: at("H2"), dx: 0.0, dy: 0.0, width: 262.5, height: 108.0, mode: AnchorMode::MoveOnly },
+        level: TimelineLevel::Quarters,
+        selection: Some((date(2024, 1, 1), date(2024, 6, 30))),
+        selection_level: TimelineLevel::Months,
+        scroll: Some(date(2024, 1, 1)),
+        style: "TimeSlicerStyleDark2".into(),
+        show_scrollbar: false,
+        ..Timeline::default()
+    };
+    wb.sheet_mut(1).unwrap().timelines.push(tl.clone());
+    let bytes = write_xlsx(&wb).unwrap();
+    let parts = unzip(&bytes);
+    let text = |p: &str| String::from_utf8(parts.get(p).unwrap_or_else(|| panic!("missing {p}")).clone()).unwrap();
+    let t = text("xl/timelines/timeline1.xml");
+    assert!(
+        t.contains("<timeline name=\"Date\" cache=\"NativeTimeline_Date\" caption=\"Order date\" level=\"1\" selectionLevel=\"2\" scrollPosition=\"2024-01-01T00:00:00\" style=\"TimeSlicerStyleDark2\" showHorizontalScrollbar=\"0\"/>"),
+        "{t}"
+    );
+    let c = text("xl/timelineCaches/timelineCache1.xml");
+    assert!(
+        c.contains("name=\"NativeTimeline_Date\" sourceName=\"Date\"><pivotTables><pivotTable tabId=\"2\" name=\"Sales by Region\"/></pivotTables>"),
+        "{c}"
+    );
+    assert!(
+        c.contains("pivotCacheId=\"1\" filterType=\"dateBetween\" filterId=\"1000\" filterPivotName=\"Sales by Region\" filterTabId=\"2\">"),
+        "{c}"
+    );
+    assert!(c.contains("<selection startDate=\"2024-01-01T00:00:00\" endDate=\"2024-06-30T00:00:00\"/><bounds startDate=\"2024-01-01T00:00:00\" endDate=\"2026-01-01T00:00:00\"/>"), "{c}");
+    let w = text("xl/workbook.xml");
+    assert!(w.contains("<definedName name=\"NativeTimeline_Date\">#N/A</definedName>"), "{w}");
+    assert!(w.contains("<x15:timelineCacheRefs><x15:timelineCacheRef r:id="), "{w}");
+    assert!(text("xl/_rels/workbook.xml.rels").contains("relationships/timelineCache\" Target=\"timelineCaches/timelineCache1.xml\""));
+    assert!(text("xl/worksheets/sheet2.xml").contains("<x15:timelineRefs><x15:timelineRef r:id="));
+    assert!(text("xl/worksheets/_rels/sheet2.xml.rels").contains("relationships/timeline\" Target=\"../timelines/timeline1.xml\""));
+    assert!(text("xl/drawings/drawing1.xml").contains("<tsle:timeslicer name=\"Date\"/>"));
+    let ct = text("[Content_Types].xml");
+    assert!(ct.contains("application/vnd.ms-excel.timeline+xml") && ct.contains("application/vnd.ms-excel.timelineCache+xml"), "{ct}");
+    let pt = text("xl/pivotTables/pivotTable1.xml");
+    assert!(pt.contains("<filter fld=\"2\" type=\"dateBetween\" evalOrder=\"-1\" id=\"1000\" name=\"Date\">"), "{pt}");
+    let pc = text("xl/pivotCache/pivotCacheDefinition1.xml");
+    assert!(pc.contains("<x14:pivotCacheDefinition pivotCacheId=\"1\"/>"), "{pc}");
+    // The timeline's field is a date field in the cache.
+    assert!(
+        pc.contains("<cacheField name=\"Date\" numFmtId=\"14\"><sharedItems containsSemiMixedTypes=\"0\" containsNonDate=\"0\" containsDate=\"1\""),
+        "{pc}"
+    );
+
+    let (back, report) = read_xlsx(&bytes).unwrap();
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    let sh = back.sheet(1).unwrap();
+    assert_eq!(sh.timelines.len(), 1);
+    let got = &sh.timelines[0];
+    let pivot_id = sh.pivots[0].id;
+    // The anchor comes back through EMU, within a fraction of a point.
+    assert!((got.anchor.width - tl.anchor.width).abs() < 0.01 && (got.anchor.height - tl.anchor.height).abs() < 0.01, "{:?}", got.anchor);
+    assert_eq!(got.anchor.cell, tl.anchor.cell);
+    assert_eq!(Timeline { id: 50, pivots: vec![1], anchor: tl.anchor, ..got.clone() }, tl);
+    assert_eq!(got.pivots, vec![pivot_id]);
+    assert_eq!(sh.pivots[0].filters, wb.sheet(1).unwrap().pivots[0].filters, "the date filter is the timeline's, not a rule");
+    assert!(back.names.iter().all(|n| !n.name.starts_with("NativeTimeline")));
+    // A second save is stable.
+    let again = write_xlsx(&back).unwrap();
+    assert_eq!(read_xlsx(&again).unwrap().0.sheet(1).unwrap().timelines.len(), 1);
+}
+
+#[test]
+fn hostile_timeline_parts_warn_not_panic() {
+    let wb_extra = r#"<definedNames><definedName name="NativeTimeline_X">#N/A</definedName></definedNames>"#;
+    let wb_rels = r#"<Relationship Id="rId2" Type="http://schemas.microsoft.com/office/2011/relationships/timelineCache" Target="timelineCaches/timelineCache1.xml"/><Relationship Id="rId3" Type="http://schemas.microsoft.com/office/2011/relationships/timelineCache" Target="timelineCaches/missing.xml"/><Relationship Id="rId4" Type="http://schemas.microsoft.com/office/2011/relationships/timelineCache" Target="timelineCaches/timelineCache2.xml"/>"#;
+    let sheet_rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.microsoft.com/office/2011/relationships/timeline" Target="../timelines/timeline1.xml"/></Relationships>"#;
+    // A cache naming a missing PivotTable with a reversed selection, a cache without a field, a
+    // timeline naming a missing cache, one without a name, one with an odd level.
+    let cache1 = r#"<timelineCacheDefinition xmlns="http://schemas.microsoft.com/office/spreadsheetml/2010/11/main" name="NativeTimeline_X" sourceName="X"><pivotTables><pivotTable tabId="9" name="Nope"/><pivotTable name="NoTab"/></pivotTables><state filterId="4"><selection startDate="2026-05-01T00:00:00" endDate="2026-01-01T00:00:00"/></state></timelineCacheDefinition>"#;
+    let cache2 = r#"<timelineCacheDefinition xmlns="http://schemas.microsoft.com/office/spreadsheetml/2010/11/main" name="Broken"/>"#;
+    let timeline = r#"<timelines xmlns="http://schemas.microsoft.com/office/spreadsheetml/2010/11/main"><timeline name="X" cache="NativeTimeline_X" level="77" scrollPosition="garbage"/><timeline name="Y" cache="Gone"/><timeline cache="NativeTimeline_X"/></timelines>"#;
+    let parts = [
+        ("xl/worksheets/_rels/sheet1.xml.rels", sheet_rels),
+        ("xl/timelineCaches/timelineCache1.xml", cache1),
+        ("xl/timelineCaches/timelineCache2.xml", cache2),
+        ("xl/timelines/timeline1.xml", timeline),
+    ];
+    let bytes = minimal("<sheetData/>", &parts, wb_rels, wb_extra);
+    let (wb, report) = read_xlsx(&bytes).unwrap();
+    let sh = wb.sheet(0).unwrap();
+    assert_eq!(sh.timelines.len(), 1);
+    let t = &sh.timelines[0];
+    assert_eq!((t.field.as_str(), t.level, t.selection, t.pivots.len(), t.scroll), ("X", TimelineLevel::Months, None, 0, None));
+    assert!(report.warnings.iter().any(|w| w.contains("\"Y\"")), "{:?}", report.warnings);
+    assert!(report.warnings.iter().any(|w| w.contains("without its name")), "{:?}", report.warnings);
+    assert!(wb.names.is_empty(), "the cache's name isn't a defined name");
+    assert!(write_xlsx(&wb).is_ok());
+}

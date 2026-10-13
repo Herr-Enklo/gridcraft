@@ -816,6 +816,29 @@ mod tests {
     }
 
     #[test]
+    fn groups_calculated_items_and_timelines_survive_an_xlsx_round_trip() {
+        let mut s = sales();
+        s.execute("insert.pivotTable", json!({"rows": ["Region"], "columns": ["Product"], "values": ["Sales"]})).unwrap();
+        s.execute("pivot.groupSelection", json!({"field": "Region", "items": ["East", "North"]})).unwrap();
+        s.execute("pivot.calculatedItem", json!({"field": "Product", "name": "AP", "formula": "=Apples+Pears"})).unwrap();
+        s.execute("insert.timeline", json!({"field": "Date"})).unwrap();
+        s.execute("timeline.select", json!({"start": "3/1/2026", "end": "8/31/2026"})).unwrap();
+        let before = report(&s);
+        let p = pt(&s);
+        let b64 = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["base64"].as_str().unwrap().to_string();
+        s.execute("file.open", json!({"name": "depth.xlsx", "base64": b64})).unwrap();
+        s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+        let q = pt(&s);
+        assert_eq!((&q.group_fields, &q.calculated_items, &q.rows), (&p.group_fields, &p.calculated_items, &p.rows));
+        let tl = s.doc().unwrap().wb.sheets.iter().flat_map(|sh| sh.timelines.iter()).next().cloned().unwrap();
+        assert_eq!(tl.pivots, vec![q.id]);
+        assert_eq!(tl.selection.map(|(a, b)| (a, b)), Some((46082.0, 46265.0)));
+        // Refreshed from the file, the report is the same.
+        s.execute("pivot.refresh", json!({})).unwrap();
+        assert_eq!(report(&s), before);
+    }
+
+    #[test]
     fn solve_order_decides_where_calculated_items_meet() {
         let mut s = sales();
         s.execute("insert.pivotTable", json!({"rows": ["Region"], "columns": ["Product"], "values": ["Sales"]})).unwrap();
