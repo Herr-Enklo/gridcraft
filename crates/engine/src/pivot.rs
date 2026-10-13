@@ -1306,15 +1306,16 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
 // ---------------------------------------------------------------- styling and writing
 
 /// Colours for a PivotTable style name (our own palette, keyed by the familiar
-/// `PivotStyleLight1…28 / Medium1…28 / Dark1…28` names).
-struct Look {
-    header_fill: Color,
-    header_font: Color,
-    line: Color,
-    filter_fill: Color,
+/// `PivotStyleLight1…28 / Medium1…28 / Dark1…28` names). The PivotTable Styles gallery draws
+/// its swatches from it.
+pub struct Look {
+    pub header_fill: Color,
+    pub header_font: Color,
+    pub line: Color,
+    pub filter_fill: Color,
 }
 
-fn look(style: &str) -> Look {
+pub fn look(style: &str) -> Look {
     let rest = style.strip_prefix("PivotStyle").unwrap_or(style);
     let (fam, n) = ["Light", "Medium", "Dark"]
         .iter()

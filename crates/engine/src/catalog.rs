@@ -316,7 +316,9 @@ pub const CATALOG: &[(&str, &str, &str, &str)] = &[
     ("pivot.sort", "PivotTable Analyze", "Sort", "Sort"),
     ("pivot.group", "PivotTable Analyze", "Group", "Group Field"),
     ("pivot.collapse", "PivotTable Analyze", "Active Field", "Collapse Field"),
-    ("pivot.delete", "PivotTable Analyze", "Actions", "Clear All"),
+    ("pivot.clearAll", "PivotTable Analyze", "Actions", "Clear All"),
+    ("pivot.clearFilters", "PivotTable Analyze", "Actions", "Clear Filters"),
+    ("pivot.delete", "PivotTable Analyze", "Actions", "Delete PivotTable"),
 ];
 
 /// Distinct catalog ids.
