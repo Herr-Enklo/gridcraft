@@ -753,6 +753,8 @@ fn new_window(s: &mut Session, _: &Json) -> Result<Json> {
     let d = s.doc()?.clone();
     let mut copy = crate::DocState::new((*d.wb).clone(), d.path.clone(), format!("{}:2", d.display_title()));
     copy.selection = d.selection.clone();
+    // A second window on a workbook whose external content is disabled doesn't enable it.
+    copy.external_blocked = d.external_blocked;
     let i = s.add_document(copy);
     Ok(json!({"index": i}))
 }

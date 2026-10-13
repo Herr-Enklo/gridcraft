@@ -431,12 +431,37 @@ pub fn range_table(sh: &gridcraft_model::Sheet, r: RangeRef, headers: bool) -> Q
 
 // ---------------------------------------------------------------- folders
 
-/// From Folder's columns, one row per file.
+/// From Folder's columns, one row per file: Power Query's, with its Attributes record expanded
+/// into the fields people use (size, hidden, read-only). The Content column (the file's bytes)
+/// isn't shown; Combine reads the files instead.
 pub fn folder_table(files: &[FileEntry]) -> QTable {
     let mut t = QTable::with_columns(
-        ["Name", "Extension", "Date accessed", "Date modified", "Date created", "Size", "Folder Path"].iter().map(|s| s.to_string()).collect(),
+        [
+            "Name",
+            "Extension",
+            "Date accessed",
+            "Date modified",
+            "Date created",
+            "Attributes.Size",
+            "Attributes.Hidden",
+            "Attributes.ReadOnly",
+            "Folder Path",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect(),
     );
-    t.types = vec![ColType::Text, ColType::Text, ColType::DateTime, ColType::DateTime, ColType::DateTime, ColType::Whole, ColType::Text];
+    t.types = vec![
+        ColType::Text,
+        ColType::Text,
+        ColType::DateTime,
+        ColType::DateTime,
+        ColType::DateTime,
+        ColType::Whole,
+        ColType::Logical,
+        ColType::Logical,
+        ColType::Text,
+    ];
     let num = |v: Option<f64>| v.map(Value::number).unwrap_or(Value::Empty);
     for f in files.iter().take(MAX_ROWS) {
         t.push_row(vec![
@@ -446,6 +471,8 @@ pub fn folder_table(files: &[FileEntry]) -> QTable {
             num(f.modified),
             num(f.created),
             Value::number(f.size as f64),
+            Value::Bool(f.hidden),
+            Value::Bool(f.read_only),
             Value::text(f.folder.as_str()),
         ]);
     }

@@ -457,6 +457,33 @@ fn load_targets() {
 }
 
 #[test]
+fn a_failed_load_keeps_the_old_table_and_table_renames_follow() {
+    let fake = Arc::new(Fake::default());
+    let mut s = session(&fake);
+    s.execute("data.fromTextCsv", json!({"text": "A\n1\n", "name": "Q", "sheet": "Sheet1", "cell": "A1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "Sheet1!A4", "input": "keep"})).unwrap();
+    // The source grows past the cell that holds data: the refresh fails, nothing is overwritten
+    // and the old table stays.
+    s.execute(
+        "query.set",
+        json!({"query": {"name": "Q", "source": {"kind": "text", "text": "A\n1\n2\n3\n4\n"}, "steps": [{"op": "promoteHeaders"}]}}),
+    )
+    .unwrap();
+    let r = s.execute("data.refresh", json!({"query": "Q"})).unwrap();
+    assert!(r["queries"][0]["error"].as_str().unwrap().contains("overwrite"), "{r}");
+    assert_eq!(cell(&s, "Sheet1", "A2"), Value::number(1.0));
+    assert_eq!(cell(&s, "Sheet1", "A4"), Value::text("keep"));
+    assert!(s.doc().unwrap().wb.table("Q").is_some());
+    // Renaming the table keeps it the query's table.
+    s.execute("table.rename", json!({"table": "Q", "name": "Renamed"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.queries[0].load.table.as_deref(), Some("Renamed"));
+    s.execute("cell.set", json!({"cell": "Sheet1!A4", "input": ""})).unwrap();
+    s.execute("data.refresh", json!({"query": "Q"})).unwrap();
+    assert_eq!(cell(&s, "Sheet1", "A5"), Value::text("4"));
+    assert_eq!(s.doc().unwrap().wb.sheets.len(), 1, "refreshed in place, no new sheet");
+}
+
+#[test]
 fn table_range_and_blank_query() {
     let fake = Arc::new(Fake::default());
     let mut s = session(&fake);
@@ -547,6 +574,8 @@ fn file_sources_folder_json_xml_and_excel() {
     let r = s.execute("data.fromFolder", json!({"path": "/in"})).unwrap();
     assert_eq!(r["rows"], 3);
     assert_eq!(cell(&s, "in", "A1"), Value::text("Name"));
+    assert_eq!(cell(&s, "in", "F1"), Value::text("Attributes.Size"));
+    assert_eq!(cell(&s, "in", "F2"), Value::number(17.0), "feb.csv's size");
     let r = s.execute("data.fromFolder", json!({"path": "/in", "combine": true, "extension": "csv", "name": "Combined"})).unwrap();
     assert_eq!(r["rows"], 3);
     assert_eq!(cell(&s, "Combined", "A1"), Value::text("Source.Name"));
@@ -643,6 +672,10 @@ fn trust_prompt_blocks_external_content_until_enabled() {
     assert!(e.contains("Security Warning"), "{e}");
     assert_eq!(cell(&s, "Sheet1", "A1"), Value::Error(CellError::Value));
     assert_eq!(fake.gets.load(Ordering::SeqCst), gets, "nothing was fetched while blocked");
+    // A second window on the workbook doesn't get around the warning.
+    s.execute("view.newWindow", json!({})).unwrap();
+    assert!(s.doc().unwrap().external_blocked);
+    s.execute("file.close", json!({"force": true})).unwrap();
     // Enable Content: WEBSERVICE fetches, refresh-on-open queries refresh.
     s.execute("data.enableContent", json!({})).unwrap();
     assert_eq!(cell(&s, "Sheet1", "A1"), Value::text("42"));

@@ -620,11 +620,20 @@ fn store(s: &mut Session, results: Vec<(usize, q::QResult<QTable>)>, pivots: Opt
             let status = match r {
                 Ok(t) => {
                     let to = cx.wb.queries.get(qi).map(|q| q.load.to).unwrap_or_default();
+                    // A load that fails (the table would overlap data, a protected sheet) leaves the
+                    // workbook as it was, the old table included.
+                    let before = cx.wb.clone();
                     let loaded = match to {
-                        LoadTo::Table => load::write(cx, qi, &t).map(|l| {
-                            new_sheets.extend(l.new_sheet);
-                            Some(l)
-                        }),
+                        LoadTo::Table => match load::write(cx, qi, &t) {
+                            Ok(l) => {
+                                new_sheets.extend(l.new_sheet);
+                                Ok(Some(l))
+                            }
+                            Err(e) => {
+                                cx.wb = before;
+                                Err(e)
+                            }
+                        },
                         LoadTo::ConnectionOnly => {
                             let old = cx.wb.queries.get_mut(qi).and_then(|q| q.load.table.take());
                             match old {
