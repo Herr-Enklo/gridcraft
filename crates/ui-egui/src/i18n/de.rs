@@ -353,6 +353,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "This workbook has no scripts yet." => "Diese Arbeitsmappe enthält noch keine Skripts.",
         "More scripts" => "Weitere Skripts",
         "Code Editor" => "Code-Editor",
+        "line" => "Zeile",
         "lines" => "Zeilen",
         "Recorded commands" => "Aufgezeichnete Befehle",
         "This workbook has no scripts yet. Record Actions or New Script creates one." => {

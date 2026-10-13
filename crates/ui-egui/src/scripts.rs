@@ -148,7 +148,10 @@ fn list(app: &mut SheetApp, ui: &mut Ui) {
                 .iter()
                 .map(|s| {
                     let what = match s.language {
-                        gridcraft_engine::model::ScriptLanguage::Rhai => format!("{} {}", s.code.lines().count(), lang.tr("lines")),
+                        gridcraft_engine::model::ScriptLanguage::Rhai => {
+                            let n = s.code.lines().count();
+                            format!("{n} {}", lang.tr(if n == 1 { "line" } else { "lines" }))
+                        }
                         gridcraft_engine::model::ScriptLanguage::Commands => lang.tr("Recorded commands").to_string(),
                     };
                     (s.name.clone(), what)
