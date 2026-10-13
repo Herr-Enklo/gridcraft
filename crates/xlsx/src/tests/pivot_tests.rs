@@ -709,3 +709,121 @@ fn data_on_rows_with_one_value_field_reads_without_warning() {
     let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
     assert!(back.sheet(0).unwrap().pivots[0].values_on_rows);
 }
+
+#[test]
+fn group_selection_fields_round_trip_as_discrete_groups() {
+    let mut wb = workbook();
+    {
+        let p = wb.sheet_mut(1).unwrap().pivots.get_mut(0).unwrap();
+        p.group_fields.push(PivotGroupField {
+            name: "Region2".into(),
+            base: "Region".into(),
+            groups: vec![PivotItemGroup { name: "Group1".into(), items: vec!["East".into(), "North".into()] }],
+        });
+        p.rows.insert(0, field("Region2"));
+        p.filters.push(PivotFilter { source_col: "Region2".into(), selected: Some(vec!["Group1".into()]), rule: None });
+    }
+    let bytes = write_xlsx(&wb).unwrap();
+    let parts = unzip(&bytes);
+    let c1 = String::from_utf8(parts.get("xl/pivotCache/pivotCacheDefinition1.xml").unwrap().clone()).unwrap();
+    // The base field names its grouped field; the grouped field maps each base item to a group item.
+    assert!(c1.contains("<fieldGroup par=\"6\"/></cacheField>"), "{c1}");
+    assert!(
+        c1.contains(
+            "<cacheField name=\"Region2\" numFmtId=\"0\" databaseField=\"0\"><fieldGroup base=\"0\"><discretePr count=\"3\"><x v=\"0\"/><x v=\"1\"/><x v=\"0\"/></discretePr><groupItems count=\"2\"><s v=\"Group1\"/><s v=\"West\"/></groupItems></fieldGroup></cacheField>"
+        ),
+        "{c1}"
+    );
+    let t1 = String::from_utf8(parts.get("xl/pivotTables/pivotTable1.xml").unwrap().clone()).unwrap();
+    assert!(t1.contains("<rowFields count=\"2\"><field x=\"6\"/><field x=\"0\"/></rowFields>"), "{t1}");
+    let (back, report) = read_xlsx(&bytes).unwrap();
+    assert!(report.warnings.iter().all(|w| !w.to_lowercase().contains("pivot")), "{:?}", report.warnings);
+    assert_eq!(back.sheet(1).unwrap().pivots[0], wb.sheet(1).unwrap().pivots[0]);
+}
+
+#[test]
+fn time_levels_bounds_and_day_spans_round_trip() {
+    let mut wb = workbook();
+    {
+        let p = wb.sheet_mut(1).unwrap().pivots.get_mut(0).unwrap();
+        let range = Some(PivotDateRange { start: Some(date(2024, 1, 1)), end: Some(date(2024, 12, 31)), days: 1 });
+        p.columns = vec![
+            PivotField { date_group: PivotDateGroup::Years, date_range: range, ..field("Date") },
+            PivotField { date_group: PivotDateGroup::Months, date_range: range, ..field("Date") },
+        ];
+        let p3 = wb.sheet_mut(1).unwrap().pivots.get_mut(2).unwrap();
+        p3.rows = vec![PivotField {
+            date_group: PivotDateGroup::Days,
+            date_range: Some(PivotDateRange { start: None, end: None, days: 30 }),
+            ..field("Date")
+        }];
+    }
+    let bytes = write_xlsx(&wb).unwrap();
+    let parts = unzip(&bytes);
+    let c1 = String::from_utf8(parts.get("xl/pivotCache/pivotCacheDefinition1.xml").unwrap().clone()).unwrap();
+    assert!(
+        c1.contains("<rangePr autoStart=\"0\" autoEnd=\"0\" groupBy=\"months\" startDate=\"2024-01-01T00:00:00\" endDate=\"2024-12-31T00:00:00\"/>"),
+        "{c1}"
+    );
+    assert!(c1.contains("<s v=\"&gt;12/31/2024\"/>"), "{c1}");
+    let c3 = String::from_utf8(parts.get("xl/pivotCache/pivotCacheDefinition3.xml").unwrap().clone()).unwrap();
+    assert!(c3.contains("groupBy=\"days\" startDate=\"2024-01-05T00:00:00\" endDate=\"2026-01-01T00:00:00\" groupInterval=\"30\"/>"), "{c3}");
+    assert!(c3.contains("<s v=\"1/5/2024 - 2/3/2024\"/>"), "{c3}");
+    let (back, report) = read_xlsx(&bytes).unwrap();
+    assert!(report.warnings.iter().all(|w| !w.to_lowercase().contains("pivot")), "{:?}", report.warnings);
+    for (a, b) in wb.sheet(1).unwrap().pivots.iter().zip(back.sheet(1).unwrap().pivots.iter()) {
+        assert_eq!(a, b, "pivot {} differs", a.name);
+    }
+    // Hours, minutes and seconds read and write their own `groupBy`.
+    for (level, name) in [(PivotDateGroup::Hours, "hours"), (PivotDateGroup::Minutes, "minutes"), (PivotDateGroup::Seconds, "seconds")] {
+        wb.sheet_mut(1).unwrap().pivots[2].rows = vec![PivotField { date_group: level, ..field("Date") }];
+        let bytes = write_xlsx(&wb).unwrap();
+        let c3 = String::from_utf8(unzip(&bytes).get("xl/pivotCache/pivotCacheDefinition3.xml").unwrap().clone()).unwrap();
+        assert!(c3.contains(&format!("groupBy=\"{name}\"")), "{c3}");
+        let (back, _) = read_xlsx(&bytes).unwrap();
+        assert_eq!(back.sheet(1).unwrap().pivots[2].rows[0].date_group, level);
+    }
+}
+
+#[test]
+fn calculated_items_load_and_round_trip() {
+    let mut wb = workbook();
+    {
+        let p = wb.sheet_mut(1).unwrap().pivots.get_mut(0).unwrap();
+        p.calculated_items = vec![
+            PivotCalcItem { field: "Region".into(), name: "East+West".into(), formula: "=East+'West'".into() },
+            PivotCalcItem { field: "Product".into(), name: "AB".into(), formula: "=Product[A]*2".into() },
+        ];
+    }
+    let bytes = write_xlsx(&wb).unwrap();
+    let parts = unzip(&bytes);
+    let c1 = String::from_utf8(parts.get("xl/pivotCache/pivotCacheDefinition1.xml").unwrap().clone()).unwrap();
+    // The items are shared items of their fields, after the data items; the formulas live in the cache.
+    assert!(c1.contains("<s v=\"East+West\"/></sharedItems>"), "{c1}");
+    assert!(
+        c1.contains(
+            "<calculatedItems count=\"2\"><calculatedItem field=\"0\" formula=\"East+&apos;West&apos;\"><pivotArea cacheIndex=\"1\" outline=\"0\" fieldPosition=\"0\"><references count=\"1\"><reference field=\"0\" count=\"1\"><x v=\"3\"/></reference></references></pivotArea></calculatedItem>"
+        ) || c1.contains("formula=\"East+'West'\""),
+        "{c1}"
+    );
+    assert!(c1.find("</cacheFields>").unwrap() < c1.find("<calculatedItems").unwrap(), "{c1}");
+    let (back, report) = read_xlsx(&bytes).unwrap();
+    assert!(report.warnings.iter().all(|w| !w.to_lowercase().contains("calculated")), "{:?}", report.warnings);
+    assert_eq!(back.sheet(1).unwrap().pivots[0].calculated_items, wb.sheet(1).unwrap().pivots[0].calculated_items);
+}
+
+#[test]
+fn calculated_items_and_groups_from_hostile_caches() {
+    // A calculated item without a reference, one pointing past the items, a discrete group with
+    // indices out of range and a group field without a base: skipped or kept safely, never a panic.
+    let cache = r#"<pivotCacheDefinition xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><cacheSource type="worksheet"><worksheetSource ref="A1:B3"/></cacheSource><cacheFields count="4"><cacheField name="K"><sharedItems><s v="x"/><s v="y"/><s v="xy"/></sharedItems><fieldGroup par="2"/></cacheField><cacheField name="V"><sharedItems/></cacheField><cacheField name="K2" databaseField="0"><fieldGroup base="0"><discretePr count="3"><x v="0"/><x v="0"/><x v="99"/></discretePr><groupItems count="1"><s v="Group1"/></groupItems></fieldGroup></cacheField><cacheField name="K3" databaseField="0"><fieldGroup><discretePr count="1"><x v="0"/></discretePr></fieldGroup></cacheField></cacheFields><calculatedItems count="3"><calculatedItem formula="x+y"/><calculatedItem field="0" formula="x*2"><pivotArea><references><reference field="0"><x v="77"/></reference></references></pivotArea></calculatedItem><calculatedItem field="0" formula="x+y"><pivotArea cacheIndex="1"><references><reference field="0"><x v="2"/></reference></references></pivotArea></calculatedItem></calculatedItems></pivotCacheDefinition>"#;
+    let table = r#"<pivotTableDefinition name="H" cacheId="1"><location ref="A3:B6"/><pivotFields count="4"><pivotField axis="axisRow"><items><item x="0"/><item x="1"/><item x="2"/></items></pivotField><pivotField dataField="1"/><pivotField axis="axisRow"><items><item x="0"/></items></pivotField><pivotField axis="axisRow"/></pivotFields><rowFields count="3"><field x="2"/><field x="0"/><field x="3"/></rowFields><dataFields><dataField name="Total" fld="1"/></dataFields></pivotTableDefinition>"#;
+    let (wb, report) = read_xlsx(&with_pivot(table, Some(cache))).unwrap();
+    let pt = &wb.sheet(0).unwrap().pivots[0];
+    assert_eq!(pt.calculated_items, vec![PivotCalcItem { field: "K".into(), name: "xy".into(), formula: "=x+y".into() }]);
+    assert_eq!(pt.group_fields.len(), 1);
+    assert_eq!(pt.group_fields[0].groups, vec![PivotItemGroup { name: "Group1".into(), items: vec!["x".into(), "y".into()] }]);
+    assert_eq!(pt.rows.iter().map(|f| f.source_col.as_str()).collect::<Vec<_>>(), ["K2", "K"]);
+    assert!(report.warnings.iter().any(|w| w.contains("K3")), "{:?}", report.warnings);
+    assert!(write_xlsx(&wb).is_ok());
+}
