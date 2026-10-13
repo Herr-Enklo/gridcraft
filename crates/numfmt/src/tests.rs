@@ -871,7 +871,7 @@ fn closed_brackets_still_hold_their_semicolons() {
 fn german_regional_format_draws_as_excel_does() {
     let de = NumberLocale::DE_DE;
     let g = |code: &str, n: f64| format_value_in(&Value::Number(n), &NumberFormat::parse(code), S, &de).text;
-    let date = 46308.604_166_666_7; // 2026-10-13 14:30
+    let date = 46_308.604_166_666_7; // 2026-10-13 14:30
     for (code, n, shown) in [
         ("General", 1234.56, "1234,56"),
         ("General", -1234.56, "-1234,56"),

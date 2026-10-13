@@ -183,6 +183,21 @@ pub fn set_current(ctx: &egui::Context, language: Language) {
     ctx.data_mut(|d| d.insert_temp(lang_key(), language));
 }
 
+fn display_key() -> egui::Id {
+    egui::Id::new("gridcraft.display_locale")
+}
+
+/// How the current frame shows values (regional numbers, the formula language's words);
+/// canonical when unset.
+pub fn display_locale(ctx: &egui::Context) -> gridcraft_engine::display::DisplayLocale {
+    ctx.data(|d| d.get_temp(display_key())).unwrap_or_default()
+}
+
+/// Sets [`display_locale`] for the current frame, next to [`set_current`].
+pub fn set_display_locale(ctx: &egui::Context, locale: gridcraft_engine::display::DisplayLocale) {
+    ctx.data_mut(|d| d.insert_temp(display_key(), locale));
+}
+
 /// English label → Japanese. Keys are the exact interface strings (command ids, file names and
 /// document text are never translated); anything absent falls back to English.
 const JAPANESE: &[(&str, &str)] = &[

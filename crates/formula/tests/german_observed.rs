@@ -662,7 +662,7 @@ fn german_input_never_panics() {
             "[#Diese Zeile]",
         ])
         .collect();
-    let mut seed: u64 = 0x5eed_de_de;
+    let mut seed: u64 = 0x5eed_dede;
     let mut next = |n: usize| {
         seed ^= seed << 13;
         seed ^= seed >> 7;
