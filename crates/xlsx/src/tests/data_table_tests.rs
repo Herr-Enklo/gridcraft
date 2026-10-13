@@ -44,7 +44,8 @@ fn data_tables_round_trip() {
     let f = |a: &str| attrs(cell(&xml, a).child("f").unwrap());
     let pairs = |v: &[(&str, &str)]| v.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect::<Vec<_>>();
     assert_eq!(f("E3"), pairs(&[("t", "dataTable"), ("ref", "E3:E4"), ("dt2D", "0"), ("dtr", "0"), ("r1", "B2")]));
-    assert_eq!(f("H2"), pairs(&[("t", "dataTable"), ("ref", "H2:I3"), ("dt2D", "1"), ("dtr", "0"), ("r1", "B1"), ("r2", "B2")]));
+    // Excel sets `dtr` on two-variable tables as well.
+    assert_eq!(f("H2"), pairs(&[("t", "dataTable"), ("ref", "H2:I3"), ("dt2D", "1"), ("dtr", "1"), ("r1", "B1"), ("r2", "B2")]));
     assert_eq!(f("L2"), pairs(&[("t", "dataTable"), ("ref", "L2:M2"), ("dt2D", "0"), ("dtr", "1"), ("r1", "B1")]));
     // Cached results: on the formula cell and as values in the others.
     assert_eq!(cell(&xml, "E3").child("v").unwrap().text, "105");
@@ -89,4 +90,35 @@ fn damaged_data_tables_keep_their_values() {
     for (a, v) in [("E5", 3.0), ("H10", 4.0), ("K10", 5.0), ("N10", 6.0), ("A1", 7.0), ("B20", 8.0), ("Q20", 9.0), ("T20", 10.0)] {
         assert_eq!(sh.value(at(a)), Value::Number(v), "{a}");
     }
+}
+
+/// The form Excel saves data tables in (observed black-box on Excel 365): the `dataTable` formula
+/// on the first result cell with its attributes in Excel's order, `dtr="1"` on a two-variable
+/// table, `ca="1"` on some, and the other results as plain cached values (text as a shared string).
+/// All three kinds read back as live tables over the same ranges.
+#[test]
+fn data_tables_in_excels_form_are_read() {
+    let rows = [
+        r#"<row r="1"><c r="B1"><v>0.05</v></c><c r="H1"><v>0.1</v></c><c r="I1"><v>0.2</v></c><c r="L1"><f>B1*B2</f><v>50</v></c><c r="M1"><v>0.1</v></c><c r="N1"><v>0.2</v></c></row>"#,
+        r#"<row r="2"><c r="B2"><v>1000</v></c><c r="E2"><f>B2*(1+B1)</f><v>1050</v></c><c r="G2"><f>B2*B1</f><v>50</v></c><c r="H2"><f t="dataTable" ref="H2:I2" dt2D="0" dtr="1" r1="B1" ca="1"/><v>100</v></c><c r="I2" t="s"><v>0</v></c><c r="M2"><f t="dataTable" ref="M2:N3" dt2D="1" dtr="1" r1="B1" r2="B2" ca="1"/><v>1</v></c><c r="N2"><v>2</v></c></row>"#,
+        r#"<row r="3"><c r="D3"><v>100</v></c><c r="E3"><f t="dataTable" ref="E3:E4" dt2D="0" dtr="0" r1="B2"/><v>105</v></c><c r="L3"><v>10</v></c><c r="M3"><v>2</v></c><c r="N3"><v>4</v></c></row>"#,
+        r#"<row r="4"><c r="D4"><v>200</v></c><c r="E4"><v>210</v></c><c r="L4"><v>20</v></c></row>"#,
+    ];
+    let sst = r#"<?xml version="1.0"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="1" uniqueCount="1"><si><t>two hundred</t></si></sst>"#;
+    let bytes = minimal(
+        &format!("<sheetData>{}</sheetData>", rows.join("")),
+        &[("xl/sharedStrings.xml", sst)],
+        r#"<Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>"#,
+        "",
+    );
+    let (wb, report) = read_xlsx(&bytes).unwrap();
+    // (The minimal package has no styles part, which is all it warns about.)
+    assert!(!report.warnings.iter().any(|w| w.contains("data table")), "{:?}", report.warnings);
+    let sh = wb.sheet(0).unwrap();
+    let mut got = sh.data_tables.clone();
+    got.sort_by_key(|t| (t.range.start.row, t.range.start.col));
+    assert_eq!(got, vec![table("G1:I2", Some("B1"), None), table("L1:N3", Some("B1"), Some("B2")), table("D2:E4", None, Some("B2"))]);
+    // The cached results are kept until the tables are calculated.
+    assert_eq!((sh.value(at("E4")), sh.value(at("I2")), sh.value(at("N3"))), (Value::Number(210.0), Value::text("two hundred"), Value::Number(4.0)));
+    assert!(sh.cell(at("M2")).unwrap().formula.is_none());
 }

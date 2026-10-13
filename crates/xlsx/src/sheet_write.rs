@@ -764,8 +764,9 @@ fn write_table_cell(
         _ => "",
     });
     let body = t.body().unwrap_or(RangeRef::cell(c));
+    // Excel writes `dtr="1"` on two-variable tables too, `r1` being the row input cell.
     let (two, row, r1, r2) = match (t.row_input, t.col_input) {
-        (Some(r), Some(col)) => (true, false, Some(r), Some(col)),
+        (Some(r), Some(col)) => (true, true, Some(r), Some(col)),
         (Some(r), None) => (false, true, Some(r), None),
         (None, col) => (false, false, col, None),
     };

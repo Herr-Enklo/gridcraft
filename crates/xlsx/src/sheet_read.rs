@@ -515,9 +515,11 @@ fn read_formula(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynam
 
 /// A What-If data table, `<f t="dataTable" ref="E3:E5" dt2D="0" dtr="0" r1="B2"/>` on its first
 /// result cell. `ref` is the results area; the edges are the row above it and the column to its
-/// left. Two-variable (`dt2D`): `r1` is the row input and `r2` the column input. One-variable: `r1`
-/// is the input, a row input when `dtr` is set. `del1`/`del2` mark a deleted input cell. The
-/// result cells keep their cached values, and recalculation fills them again.
+/// left. Two-variable (`dt2D`): `r1` is the row input and `r2` the column input, whatever `dtr`
+/// says (Excel sets it on two-variable tables). One-variable: `r1` is the input, a row input when
+/// `dtr` is set. `del1`/`del2` mark a deleted input cell; `ca` (calculate always) needs nothing
+/// here, as tables are calculated with their inputs anyway. The result cells keep their cached
+/// values, and recalculation fills them again.
 fn read_data_table(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef) {
     let Some(body) = f.attr("ref").and_then(RangeRef::parse) else {
         cx.warn("a what-if data table has no results area; kept its values");
