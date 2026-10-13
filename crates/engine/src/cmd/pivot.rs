@@ -2153,6 +2153,25 @@ mod tests {
     }
 
     #[test]
+    fn top10_keeps_items_tied_at_the_cut_off() {
+        // #498 review: Excel keeps every item tied with the last one a Top N keeps.
+        let mut s = Session::new();
+        s.new_workbook();
+        let rows = json!([["Item", "Score"], ["A", 5], ["B", 5], ["C", 5], ["D", 10], ["E", 1]]);
+        s.execute("range.setValues", json!({"range": "A1", "values": rows})).unwrap();
+        s.execute("insert.pivotTable", json!({"source": "Sheet1!A1:B6", "rows": ["Item"], "values": ["Score"]})).unwrap();
+        // Top 2: D, then A, B and C all tie at 5 → 25.
+        s.execute("pivot.top10", json!({"field": "Item", "count": 2})).unwrap();
+        assert_eq!(grand_total(&s), Value::Number(25.0));
+        // Top 1 has no tie at its cut-off.
+        s.execute("pivot.top10", json!({"field": "Item", "count": 1})).unwrap();
+        assert_eq!(grand_total(&s), Value::Number(10.0));
+        // Bottom 2: E, then the three tied at 5 → 16.
+        s.execute("pivot.top10", json!({"field": "Item", "count": 2, "top": false})).unwrap();
+        assert_eq!(grand_total(&s), Value::Number(16.0));
+    }
+
+    #[test]
     fn filters_round_trip_and_refusals() {
         let mut s = sales();
         s.execute("insert.pivotTable", json!({"rows": ["Region", "Product"], "columns": [], "values": ["Sales", "Units"]})).unwrap();

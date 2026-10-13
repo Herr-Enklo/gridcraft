@@ -904,7 +904,13 @@ fn rule_drops(rule: &PivotRule, scored: &[(u32, Option<f64>)]) -> Vec<u32> {
             let keep = match by {
                 PivotTopBy::Items => {
                     let n = count.max(0.0).floor();
-                    if n >= order.len() as f64 { order.len() } else { n as usize }
+                    let n = if n >= order.len() as f64 { order.len() } else { n as usize };
+                    // As in Excel, items tied with the last one kept are kept too (a Top 15 with
+                    // items 14 to 16 all equal shows 16 items).
+                    match n.checked_sub(1).and_then(|i| order.get(i)) {
+                        Some((_, cut)) => n + order.iter().skip(n).take_while(|(_, v)| v == cut).count(),
+                        None => n,
+                    }
                 }
                 PivotTopBy::Percent | PivotTopBy::Sum => {
                     // Items are kept until their running sum reaches the goal.
