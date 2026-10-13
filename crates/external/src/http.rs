@@ -15,6 +15,7 @@ pub fn get(req: &HttpRequest) -> Result<HttpResponse, String> {
     let url = req.url.trim();
     let host = url_host(url).to_string();
     let agent: ureq::Agent = ureq::Agent::config_builder()
+        .tls_config(tls())
         .timeout_global(Some(Duration::from_millis(req.timeout_ms.max(1))))
         .max_redirects(MAX_REDIRECTS)
         .http_status_as_error(false)
@@ -39,6 +40,18 @@ pub fn get(req: &HttpRequest) -> Result<HttpResponse, String> {
         e => describe(&e, &host),
     })?;
     Ok(HttpResponse { status, content_type, body })
+}
+
+/// The system TLS stack and its certificate store on Windows and macOS; rustls elsewhere.
+fn tls() -> ureq::tls::TlsConfig {
+    #[cfg(any(windows, target_os = "macos"))]
+    {
+        ureq::tls::TlsConfig::builder().provider(ureq::tls::TlsProvider::NativeTls).root_certs(ureq::tls::RootCerts::PlatformVerifier).build()
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        ureq::tls::TlsConfig::builder().provider(ureq::tls::TlsProvider::Rustls).build()
+    }
 }
 
 fn describe(e: &ureq::Error, host: &str) -> String {

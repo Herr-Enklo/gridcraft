@@ -3,8 +3,9 @@
 //! The engine owns the [`DataAccess`] trait and never opens a connection itself; the desktop app
 //! and the command line call [`install`] to hand it this implementation, as they hand the UI
 //! their clipboard and printers. It adds what `std` can't do portably:
-//! - HTTP(S) GET through `ureq` with rustls (no system TLS library needed): http and https only,
-//!   a timeout per request, a cap on the body size, redirects followed a bounded number of times;
+//! - HTTP(S) GET through `ureq` (the system TLS stack and certificate store on Windows and macOS,
+//!   rustls elsewhere): http and https only, a timeout per request, a cap on the body size,
+//!   redirects followed a bounded number of times;
 //! - ODBC on Windows through the driver manager Windows ships, for From ODBC, From SQL Server
 //!   Database and From Microsoft Access Database.
 //!
