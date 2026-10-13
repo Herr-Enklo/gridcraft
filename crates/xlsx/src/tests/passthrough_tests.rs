@@ -858,7 +858,7 @@ fn gridcraft_queries_round_trip_beside_kept_custom_xml() {
     let mut parts = u.parts.clone();
     parts.insert(
         "customXml/gridcraftQueries.xml".into(),
-        format!(r#"<gridcraftQueries xmlns="urn:gridcraft:queries:1">[{{"name":</gridcraftQueries>"#).into_bytes(),
+        br#"<gridcraftQueries xmlns="urn:gridcraft:queries:1">[{"name":</gridcraftQueries>"#.to_vec(),
     );
     let files: Vec<(&str, &[u8])> = parts.iter().map(|(k, v)| (k.as_str(), v.as_slice())).collect();
     let (broken, rep) = read_xlsx(&make_zip(&files)).unwrap();
