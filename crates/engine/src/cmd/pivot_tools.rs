@@ -59,6 +59,15 @@ pub fn specs() -> Vec<CommandSpec> {
             solve_order
         ),
         cmd!(
+            query "pivot.fieldItems",
+            "Field Items",
+            [],
+            None,
+            "{pivot?, field} → {field, items: [{label, shown}]}: the field's items (grouped as the field is, with its calculated items) and whether its item selection shows each",
+            has_doc,
+            field_items_query
+        ),
+        cmd!(
             "pivot.listFormulas",
             "List Formulas",
             ["PivotTable Analyze", "Calculations"],
@@ -479,6 +488,27 @@ fn solve_order(s: &mut Session, p: &Json) -> Result<Json> {
     })
 }
 
+fn field_items_query(s: &mut Session, p: &Json) -> Result<Json> {
+    const C: &str = "pivot.fieldItems";
+    let field = str_param(p, "field").ok_or_else(|| bad(C, "missing `field`"))?.trim().to_string();
+    let (si, pi) = find_pivot(s, p)?;
+    let d = s.doc()?;
+    let pt = d.wb.sheet(si).and_then(|sh| sh.pivots.get(pi)).ok_or_else(|| other("There's no such PivotTable."))?;
+    let src = pv::read_source(&d.wb, &pt.source, si).map_err(other)?;
+    let (c, g) = pv::resolve_name(&src, pt, &field).ok_or_else(|| bad(C, format!("no field `{field}` in the PivotTable")))?;
+    let mut labels = pv::distinct_labels(&d.wb, &src, c, g, 100_000);
+    labels.extend(pt.calculated_items.iter().filter(|x| x.field.eq_ignore_ascii_case(&field)).map(|x| x.name.clone()));
+    let selected = pt.filters.iter().find(|f| f.source_col.eq_ignore_ascii_case(&field)).and_then(|f| f.selected.as_ref());
+    let items: Vec<Json> = labels
+        .into_iter()
+        .map(|l| {
+            let shown = selected.is_none_or(|sel| sel.iter().any(|x| x.eq_ignore_ascii_case(&l)));
+            json!({"label": l, "shown": shown})
+        })
+        .collect();
+    Ok(json!({"field": field, "items": items}))
+}
+
 fn list_formulas(s: &mut Session, p: &Json) -> Result<Json> {
     let (si, pi) = find_pivot(s, p)?;
     if s.doc()?.wb.protected_structure {
@@ -832,7 +862,7 @@ mod tests {
         assert_eq!((&q.group_fields, &q.calculated_items, &q.rows), (&p.group_fields, &p.calculated_items, &p.rows));
         let tl = s.doc().unwrap().wb.sheets.iter().flat_map(|sh| sh.timelines.iter()).next().cloned().unwrap();
         assert_eq!(tl.pivots, vec![q.id]);
-        assert_eq!(tl.selection.map(|(a, b)| (a, b)), Some((46082.0, 46265.0)));
+        assert_eq!(tl.selection, Some((46082.0, 46265.0)));
         // Refreshed from the file, the report is the same.
         s.execute("pivot.refresh", json!({})).unwrap();
         assert_eq!(report(&s), before);

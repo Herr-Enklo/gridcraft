@@ -245,6 +245,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                             "Automate" => automate(app, ui),
                             "Table Design" => table_design(app, ui),
                             "Chart Design" => chart_design(app, ui),
+                            "Timeline" => crate::timeline_view::ribbon_tab(app, ui),
                             crate::paper_view::TAB => crate::paper_view::ribbon_tab(app, ui),
                             _ => home(app, ui),
                         }
@@ -288,6 +289,9 @@ fn contextual_tabs(app: &SheetApp) -> Vec<&'static str> {
         if app.selected_chart.is_some_and(|id| sh.charts.iter().any(|c| c.id == id)) {
             v.push("Chart Design");
         }
+        if app.selected_chart.is_some_and(|id| sh.timelines.iter().any(|t| t.id == id)) {
+            v.push("Timeline");
+        }
         if app.grid.hf_edit.is_some() {
             v.push(crate::paper_view::TAB);
         }
@@ -295,7 +299,7 @@ fn contextual_tabs(app: &SheetApp) -> Vec<&'static str> {
     v
 }
 
-fn sep(ui: &mut Ui) {
+pub(crate) fn sep(ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let (r, _) = ui.allocate_exact_size(vec2(13.0, 72.0), Sense::hover());
     ui.painter().line_segment([pos2(r.center().x, r.top() + 6.0), pos2(r.center().x, r.bottom() - 6.0)], Stroke::new(1.0, t.separator));
@@ -1523,6 +1527,12 @@ fn insert(app: &mut SheetApp, ui: &mut Ui) {
     sep(ui);
     if big_button(ui, Icon::Filter, "Slicer", "Insert a slicer to filter a table", false).clicked() {
         act(app, "insert.slicer", json!({}));
+    }
+    let __k = big_button(ui, Icon::Calendar, "Timeline", "Insert a timeline to filter a PivotTable by date", false);
+    __k.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), app.ui.language.tr("Timeline")));
+    control_keytip(app, ui, &__k, "insert.timeline");
+    if __k.clicked() {
+        act(app, "insert.timeline", json!({}));
     }
     sep(ui);
     let sp = big_button(ui, Icon::Sparkline, "Sparklines", "Sparklines", true);

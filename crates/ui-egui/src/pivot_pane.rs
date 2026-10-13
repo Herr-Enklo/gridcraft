@@ -155,16 +155,31 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                                         app.run_or_alert("pivot.group", json!({"pivot": name, "field": f, "by": g}));
                                     }
                                 }
-                                if *key != "filters" {
-                                    ui.separator();
-                                    for (top, l) in [(true, "Top 10 Items"), (false, "Bottom 10 Items")] {
-                                        if ui.button(l).clicked() {
-                                            app.run_or_alert("pivot.top10", json!({"pivot": name, "field": f, "top": top}));
-                                        }
-                                    }
-                                }
-                                if ui.button(format!("Clear Filter From \"{f}\"")).clicked() {
+                                ui.separator();
+                                if ui.button(format!("{} \"{f}\"", lang.tr("Clear Filter From"))).clicked() {
                                     app.run_or_alert("pivot.clearFilter", json!({"pivot": name, "field": f}));
+                                }
+                                if *key != "filters" {
+                                    // Label Filters ▸ and Value Filters ▸, as on the report's field button.
+                                    ui.menu_button(lang.tr("Label Filters"), |ui| {
+                                        for (op, l, _) in crate::pivot_ui::LABEL_OPS {
+                                            if ui.button(lang.tr(l)).clicked() {
+                                                app.open_dialog("pivotLabelFilter", json!({"pivot": name, "field": f, "op": op}));
+                                            }
+                                        }
+                                    });
+                                    ui.menu_button(lang.tr("Value Filters"), |ui| {
+                                        for op in crate::pivot_ui::VALUE_OPS {
+                                            let label = crate::pivot_ui::LABEL_OPS.iter().find(|(o, ..)| *o == op).map_or(op, |(_, l, _)| l);
+                                            if ui.button(lang.tr(label)).clicked() {
+                                                app.open_dialog("pivotValueFilter", json!({"pivot": name, "field": f, "op": op}));
+                                            }
+                                        }
+                                        ui.separator();
+                                        if ui.button(lang.tr("Top 10…")).clicked() {
+                                            app.open_dialog("pivotTop10", json!({"pivot": name, "field": f}));
+                                        }
+                                    });
                                 }
                             }
                             ui.separator();

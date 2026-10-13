@@ -782,6 +782,10 @@ impl Dialog {
                 app.run_or_alert("review.showComments", json!({"on": true}));
                 return None;
             }
+            n if crate::pivot_ui::DIALOGS.contains(&n) => {
+                let defaults = crate::pivot_ui::defaults(app, n, &params);
+                Dialog::custom(n, crate::pivot_ui::title(n), defaults)
+            }
             "watch" | "selectionPane" | "formatChart" => {
                 app.grid.pane = Some(
                     match name {
@@ -1033,6 +1037,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "recommendedCharts" => 600.0,
         "analysisToolPak" => 420.0,
         "solver" => 460.0,
+        n if crate::pivot_ui::DIALOGS.contains(&n) => 440.0,
         _ => 380.0,
     };
     let window = egui::Window::new(app.ui.language.tr(&d.title))
@@ -1047,6 +1052,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
             ui.set_min_width(width - 20.0);
             match d.name.as_str() {
                 "formatCells" => format_cells(app, ui, &mut d, &mut confirm),
+                n if crate::pivot_ui::DIALOGS.contains(&n) => crate::pivot_ui::dialog(app, ui, &mut d, &mut confirm, &mut open),
                 "dataValidation" => data_validation_form(ui, &mut d, &mut confirm, &mut open),
                 "insertFunction" => insert_function(app, ui, &mut d, &mut confirm),
                 "find" => find(app, ui, &mut d),
@@ -1365,7 +1371,7 @@ fn paste_special_shortcuts(d: &mut Dialog, ctx: &egui::Context) {
     });
 }
 
-fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) {
+pub(crate) fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) {
     ui.add_space(8.0);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         let lang = crate::i18n::current(ui.ctx());

@@ -37,6 +37,8 @@ const MAX_SOURCE_CELLS: u64 = 10_000_000;
 const MAX_RECORD_CELLS: u64 = 2_000_000;
 /// Most shared items kept per field (Excel's limit is 1,048,576 unique items).
 const MAX_ITEMS: usize = 1_048_576;
+/// Most day-span group items written (a span of a few days over centuries is capped).
+const MAX_SPANS: usize = 100_000;
 /// Most cache fields read.
 const MAX_FIELDS: usize = 16_384;
 /// The `x14:dataField` extension (Excel 2010 show-values-as additions such as rank).
@@ -767,7 +769,7 @@ fn group_items(sys: DateSystem, by: PivotDateGroup, start: f64, end: f64, days: 
             // Spans of `days` days from the start, the last one cut at the end.
             let step = f64::from(days);
             let mut lo = start;
-            while lo <= end && v.len() < MAX_ITEMS {
+            while lo <= end && v.len() < MAX_SPANS {
                 v.push(format!("{} - {}", mdy(sys, lo), mdy(sys, (lo + step - 1.0).min(end))));
                 lo += step;
             }
