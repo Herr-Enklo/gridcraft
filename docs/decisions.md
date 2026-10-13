@@ -2,7 +2,7 @@
 
 ## Scripts are Rhai with an Office Scripts-shaped object model
 
-The owner chose [Rhai](https://rhai.rs) for scripts with logic (gaps.md §21): pure Rust, builds for
+Proposed (gaps.md §21 leaves the language to the maintainers): [Rhai](https://rhai.rs) for scripts with logic: pure Rust, builds for
 wasm32, and sandboxable (operation, call-depth and data-size limits; no file or network access in
 the language). The object model keeps Excel's Office Scripts names (`getActiveWorksheet`, `getRange`,
 `setValues`, `getFormat().getFont().setBold`) so knowledge carries over; any command is reachable

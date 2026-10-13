@@ -2,8 +2,8 @@
 
 > **Last updated:** 2026-10-13 · **Change:** major (created: Rhai scripts with an Office Scripts-shaped object model) · **Target:** Microsoft Excel (Microsoft 365)
 
-GridCraft scripts automate a workbook with real logic: loops, conditions, functions. The owner of
-GridCraft chose [Rhai](https://rhai.rs) as the scripting language (gaps.md §21): it is pure Rust,
+GridCraft scripts automate a workbook with real logic: loops, conditions, functions. They are written
+in [Rhai](https://rhai.rs) (proposed in gaps.md §21, pending the maintainers' decision): it is pure Rust,
 builds for the web (wasm32), and can be sandboxed. The objects a script works with follow Excel's
 [Office Scripts](https://learn.microsoft.com/office/dev/scripts/) API (`workbook`,
 `getActiveWorksheet()`, `getRange("A1:B3")`, `setValues(…)`, `getFormat().getFont().setBold(true)`),

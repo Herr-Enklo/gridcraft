@@ -150,7 +150,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   [hardware-parity.md](hardware-parity.md)
 
 ### 21. Automation and add-ins (F)
-- **Owner decision taken:** scripts are written in [Rhai](https://rhai.rs) (pure Rust, builds for
+- **Language proposed, pending the maintainers' decision:** scripts are written in [Rhai](https://rhai.rs) (pure Rust, builds for
   wasm, sandboxable) with an object model shaped like Excel's Office Scripts API (`workbook`,
   `getActiveWorksheet`, `getRange`, `getValues`/`setValues`, `getFormat().getFont()…`) plus
   `run(id, params)` for any command. Landed: Automate › Scripting Tools (Record Actions records
@@ -180,7 +180,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-13 | minor | §21: the owner chose Rhai for scripts; Automate › Scripting Tools, Code Editor, Office Scripts-shaped object model, sandbox, XLSX storage, CLI and MCP landed |
+| 2026-10-13 | minor | §21: Rhai proposed for scripts (maintainers to decide); Automate › Scripting Tools, Code Editor, Office Scripts-shaped object model, sandbox, XLSX storage, CLI and MCP landed |
 | 2026-10-12 | minor | rows auto-fit oversized fonts on open and whole-row/column formatting (#833) |
 | 2026-10-12 | minor | Page Layout view: dragging margins on the rulers (#792) removed from the §14 remainder |
 | 2026-10-12 | minor | §13: Forecast Sheet Forecast Start (hindcast) landed (#785) |
