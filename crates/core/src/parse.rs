@@ -807,6 +807,29 @@ mod tests {
     }
 
     #[test]
+    fn regional_parsing_survives_random_input() {
+        // Random strings from the characters German numbers and dates are made of.
+        let alphabet: Vec<char> = "0123456789.,;:-+ %€$()/eE'\u{a0}OktMärzJanuar".chars().collect();
+        let mut seed: u64 = 0x0dde_c0de;
+        let mut next = |n: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % n.max(1) as u64) as usize
+        };
+        let swiss = NumberLocale::DE_DE.with_separators('.', '\'');
+        for _ in 0..20_000 {
+            let len = next(16);
+            let s: String = (0..len).map(|_| alphabet[next(alphabet.len())]).collect();
+            for loc in [NumberLocale::DE_DE, swiss] {
+                if let Value::Number(n) = parse_input_in(&s, DateSystem::D1900, &loc).value {
+                    assert!(n.is_finite(), "{s:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
     fn regional_parsing_never_panics_on_odd_input() {
         let de = NumberLocale::DE_DE;
         let long = "1.".repeat(10_000);

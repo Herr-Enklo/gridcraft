@@ -318,6 +318,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Save the workbook as a web page." => "Speichert die Arbeitsmappe als Webseite.",
         "Options|General" => "Allgemein",
         "Options|Save" => "Speichern",
+        "Options|Editing" => "Bearbeitungsoptionen",
         "Options|Advanced" => "Erweitert",
         "Use system separators" => "Trennzeichen vom Betriebssystem übernehmen",
         "Decimal separator:" => "Dezimaltrennzeichen:",

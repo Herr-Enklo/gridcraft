@@ -521,6 +521,13 @@ fn fuzz_no_panic() {
                 assert!(r.text.is_char_boundary(pos), "{code:?} {v}");
             }
             let _ = format_value(&Value::Number(v), &fmt, DateSystem::D1904);
+            // German drawing (multi-byte separators and names) keeps the fill position valid.
+            for loc in [NumberLocale::DE_DE, NumberLocale::DE_DE.with_separators('·', '\u{202f}')] {
+                let r = format_value_in(&Value::Number(v), &fmt, S, &loc);
+                if let Some((_, pos)) = r.fill {
+                    assert!(r.text.is_char_boundary(pos), "{code:?} {v}");
+                }
+            }
             let _ = text_function(&Value::Number(v), &code, S);
         }
         let _ = format_value(&Value::from("text"), &fmt, S);

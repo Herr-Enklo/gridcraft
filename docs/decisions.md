@@ -14,6 +14,23 @@ errors, table specifiers, separators) behind one `Dialect` table, so a language 
 data file and one `FormulaLocale` variant, without new parsing code. Every entry carries its
 source; Microsoft's localized pages are machine-translated, so names need two agreeing signals.
 
+German's words were then observed in Excel 365 de-DE through its automation interface (every
+function entered canonically and read back localized), which replaces the page votes for German
+and is checked pair by pair in `crates/formula/tests/german_observed.rs`.
+
+## Regional number formats at the interface boundary
+
+Numbers and dates follow the interface language's regional format (de-DE observed; other
+languages stay en-US until observed), with Excel's "Use system separators" option as a
+`ui.json` preference. A `NumberLocale` (core, L0) carries the region's conventions and the
+separators; `numfmt` draws with it (`format_value_in`) and `core` reads typed text with it
+(`parse_input_in`). Workbooks, format codes, formulas, `TEXT()`, the clipboard and every engine
+command stay en-US: the interface parses German input itself and calls `cell.set` with the
+canonical value and the automatic format (`autoFormat`), as it already translates formulas.
+`Session.display_locale` (set by the interface, canonical elsewhere) is what PDF, print and Save
+As CSV/TSV/Web Page use, because those are the values as displayed; the CLI and MCP keep en-US.
+A new CSV is separated by `;` where the decimal separator is `,`, Excel's list separator there.
+
 ## Preserve array evaluation when exporting formulas (#64)
 
 GridCraft evaluates ordinary formulas with array semantics even when the final result occupies one cell. XLSX export marks actual spills and formulas whose results may differ under legacy implicit intersection as dynamic, using the spill range or a single-cell array reference. Legacy CSE array ranges keep their existing representation.

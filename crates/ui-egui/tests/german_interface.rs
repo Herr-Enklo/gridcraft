@@ -226,4 +226,7 @@ fn the_options_page_offers_the_separators_with_german_labels() {
     h.get_by_label("Trennzeichen vom Betriebssystem übernehmen").click();
     h.run_steps(4);
     assert!(!h.state().ui.separators.use_system);
+    if let Ok(path) = std::env::var("GRIDCRAFT_LOCALE_SCREENSHOT") {
+        h.render().unwrap().save(std::path::Path::new(&path).with_file_name("german-options.png")).unwrap();
+    }
 }
