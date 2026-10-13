@@ -96,8 +96,8 @@ Each table lives in `crates/formula/src/input/<language>.rs` with its sources.
 German was observed black-box in Excel 365 (German interface, de-DE regional format) through its
 automation interface on 2026-10-13: every function GridCraft knows, plus four it doesn't yet, was
 entered in canonical form and read back as German Excel shows it, and so were the separators,
-booleans, errors and table specifiers. `crates/formula/tests/german_observed.rs` checks all 518
-calls in both directions. The observation corrected two words Microsoft's German help pages give:
+booleans, errors, table specifiers and a data table's `TABLE` formula (`MEHRFACHOPERATION`).
+`crates/formula/tests/german_observed.rs` checks all 519 calls in both directions. The observation corrected two words Microsoft's German help pages give:
 `MAP` stays `MAP`, and German Excel shows `#CALC!` (not `#KALK!`).
 
 The Spanish, Portuguese and Russian names come from Microsoft Support's localized Excel function
