@@ -930,6 +930,20 @@ impl DataTable {
         format!("TABLE({},{})", a(self.row_input), a(self.col_input))
     }
 
+    /// The cells that hold the table's formulas: the top row of a table with values down its left
+    /// column, the left column of one with values across its top row, the top-left corner of a
+    /// two-variable table. Every result depends on all of them.
+    pub fn formulas(&self) -> Option<RangeRef> {
+        let body = self.body()?;
+        let (r0, c0) = (self.range.start.row, self.range.start.col);
+        match (self.row_input, self.col_input) {
+            (None, Some(_)) => Some(RangeRef::new(CellRef::new(r0, body.start.col), CellRef::new(r0, body.end.col))),
+            (Some(_), None) => Some(RangeRef::new(CellRef::new(body.start.row, c0), CellRef::new(body.end.row, c0))),
+            (Some(_), Some(_)) => Some(RangeRef::cell(self.range.start)),
+            (None, None) => None,
+        }
+    }
+
     /// The substitutions that fill the body, grouped so that each is computed once. Empty for a
     /// table that isn't [valid](Self::is_valid).
     pub fn trials(&self) -> Vec<TableTrial> {

@@ -1418,3 +1418,117 @@ fn offset_extreme_arguments_return_ref() {
         assert_eq!(crate::evaluate(&wb, 0, c("D1"), formula), Value::Number(expected), "{formula}");
     }
 }
+
+/// Random edits around data tables (input values along the edges, the formulas, their precedents
+/// and the input cells): after each, the incrementally recalculated sheet, where an edited input
+/// value recalculates only its own row, column or cells, equals a full recalculation.
+#[test]
+fn data_tables_recalculated_in_part_agree_with_a_full_recalculation() {
+    let mut t = T::new();
+    t.set("A1", "3");
+    t.set("B1", "0.1");
+    t.set("B2", "100");
+    t.set("A2", "=B1*A1");
+    // One-variable down a column (two formulas), across a row, and two-variable.
+    t.set("E2", "=B2*(1+B1)+A2");
+    t.set("F2", "=B2-A1");
+    t.set("H2", "=B1*B2");
+    t.set("K1", "=B1*B2+A1");
+    for (i, row) in (3..=6).enumerate() {
+        t.set(&format!("D{row}"), &(10 * (i + 1)).to_string());
+        t.set(&format!("K{}", row - 1), &(i + 1).to_string());
+    }
+    for (i, col) in ["I", "J", "K"].iter().enumerate() {
+        t.set(&format!("{col}1"), &format!("0.{}", i + 1));
+    }
+    for (i, col) in ["L", "M"].iter().enumerate() {
+        t.set(&format!("{col}1"), &(i + 2).to_string());
+    }
+    let sh = t.wb.sheet_mut(0).unwrap();
+    sh.data_tables.push(table("D2:F6", None, Some("B2")));
+    sh.data_tables.push(table("H1:J2", Some("B1"), None));
+    sh.data_tables.push(table("K1:M5", Some("B1"), Some("B2")));
+    t.set("O1", "=SUM(E3:F6)+SUM(L2:M5)+I2");
+    t.calc.recalc_all(&mut t.wb);
+    let cells = ["D3", "D4", "D5", "D6", "I1", "J1", "K2", "K3", "L1", "M1", "A1", "B1", "B2", "E2", "F2", "H2", "K1"];
+    let inputs = ["7", "0.25", "-3", "=A1*2", "=B2/10", "", "1e3", "=E3"];
+    let formulas = ["=B2*(1+B1)", "=B1+B2+A1", "=A2*B2", "=B1"];
+    let mut seed: u64 = 0x5EED;
+    let mut next = |n: usize| {
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        ((seed >> 33) as usize) % n
+    };
+    for step in 0..80 {
+        let at = cells[next(cells.len())];
+        let edge_formula = matches!(at, "E2" | "F2" | "H2" | "K1");
+        let input = if edge_formula { formulas[next(formulas.len())] } else { inputs[next(inputs.len())] };
+        t.set(at, input);
+        let mut full = t.wb.clone();
+        Calc::new().recalc_all(&mut full);
+        for (c, cell) in full.sheet(0).unwrap().cells.iter() {
+            let got = t.wb.sheet(0).unwrap().value(c);
+            let same = match (&got, &cell.value) {
+                (Value::Number(a), Value::Number(b)) => (a - b).abs() <= 1e-9 * a.abs().max(1.0),
+                (a, b) => a == b,
+            };
+            assert!(same, "step {step}: {at} := {input:?}; {} is {got:?}, a full recalculation gives {:?}", c.a1(), cell.value);
+        }
+    }
+}
+
+/// A table whose calculation would take more formula evaluations than a refresh may spend keeps
+/// its values (a hostile file can't hang the application); a table within it is calculated.
+#[test]
+fn data_tables_past_the_work_budget_keep_their_values() {
+    let mut t = T::new();
+    // 400 formulas depend on B1: a 300 × 300 table would evaluate them 90,000 times.
+    let sh = t.wb.sheet_mut(0).unwrap();
+    sh.cells.set(c("B1"), Cell::value(Value::Number(1.0)));
+    sh.cells.set(c("ZZ1"), Cell::formula(Formula::new("=B1+1")));
+    for row in 2..=400 {
+        sh.cells.set(CellRef::new(row - 1, 701), Cell::formula(Formula::new(&format!("=ZZ{}+B1", row - 1))));
+    }
+    sh.cells.set(c("A1"), Cell::formula(Formula::new("=ZZ400")));
+    sh.data_tables.push(table("A1:KO301", Some("B1"), Some("B2")));
+    // A small one-variable table on the same sheet.
+    sh.cells.set(c("QA1"), Cell::formula(Formula::new("=B3*2")));
+    sh.cells.set(c("PZ2"), Cell::value(Value::Number(4.0)));
+    sh.cells.set(c("QA2"), Cell::value(Value::text("stale")));
+    sh.data_tables.push(table("PZ1:QA2", None, Some("B3")));
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.get("B2"), Value::Empty);
+    assert_eq!(t.get("KO301"), Value::Empty, "too much work: not calculated");
+    assert_eq!(t.num("QA2"), 8.0, "a table within the budget is calculated");
+}
+
+/// The substitutions of a table leave the calculation as they found it: circular references
+/// found before are still listed, an input cell holding a formula keeps it (and its place in the
+/// dependency graph), and formulas over it recalculate as before.
+#[test]
+fn data_tables_leave_the_calculation_as_they_found_it() {
+    let mut t = T::new();
+    t.set("Z1", "=Z1+1");
+    assert_eq!(t.calc.circular, vec![(0, c("Z1"))]);
+    t.set("A1", "5");
+    t.set("B2", "=A1*2");
+    t.set("E2", "=B2+1");
+    t.set("D3", "100");
+    t.set("D4", "200");
+    t.wb.sheet_mut(0).unwrap().data_tables.push(table("D2:E4", None, Some("B2")));
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.calc.circular, vec![(0, c("Z1"))]);
+    assert_eq!((t.num("E3"), t.num("E4"), t.num("B2"), t.num("E2")), (101.0, 201.0, 10.0, 11.0));
+    assert!(t.wb.sheet(0).unwrap().cell(c("B2")).unwrap().formula.is_some(), "the input cell keeps its formula");
+    t.set("A1", "6");
+    assert_eq!((t.num("B2"), t.num("E2"), t.num("E4")), (12.0, 13.0, 201.0));
+    // With constant input cells, the table runs on this calculation's own graph.
+    t.set("B3", "1");
+    t.set("H2", "=B3*10");
+    t.set("G3", "2");
+    t.wb.sheet_mut(0).unwrap().data_tables.push(table("G2:H3", None, Some("B3")));
+    t.calc.recalc_all(&mut t.wb);
+    assert_eq!(t.calc.circular, vec![(0, c("Z1"))]);
+    assert_eq!(t.num("H3"), 20.0);
+    t.set("B3", "4");
+    assert_eq!((t.num("H2"), t.num("H3")), (40.0, 20.0));
+}
