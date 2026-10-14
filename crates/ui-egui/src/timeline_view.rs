@@ -155,10 +155,13 @@ pub fn paint(app: &SheetApp, p: &Painter, geo: &Geo, wb: &std::sync::Arc<Workboo
         }
         if let Some(l) = lay.label {
             let label = tlc::selection_label(wb, tl);
+            // "All Periods" is a fixed caption; a chosen period (`Mar - Aug 2026`) stays as the engine writes it.
+            let label = app.ui.language.tr(&label);
             clip.text(l.left_center(), Align2::LEFT_CENTER, label, theme::ui_font(11.5 * geo.z), text);
         }
         if let Some(l) = lay.level {
-            clip.text(l.right_center(), Align2::RIGHT_CENTER, format!("{} ▾", level_caption(tl.level)), theme::ui_font(10.5 * geo.z), on);
+            let level = app.ui.language.tr(level_caption(tl.level));
+            clip.text(l.right_center(), Align2::RIGHT_CENTER, format!("{level} ▾"), theme::ui_font(10.5 * geo.z), on);
         }
         for (g, caption) in &lay.groups {
             clip.text(g.left_center() + vec2(2.0 * geo.z, 0.0), Align2::LEFT_CENTER, caption, theme::ui_font(10.5 * geo.z), text);

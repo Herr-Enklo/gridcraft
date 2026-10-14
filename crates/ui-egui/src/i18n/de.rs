@@ -426,6 +426,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Selection Label" => "Auswahlbeschriftung",
         "Scrollbar" => "Bildlaufleiste",
         "Time Level" => "Zeitebene",
+        "All Periods" => "Alle Zeiträume",
         "YEARS" => "JAHRE",
         "QUARTERS" => "QUARTALE",
         "MONTHS" => "MONATE",
