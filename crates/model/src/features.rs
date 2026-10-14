@@ -1338,14 +1338,16 @@ impl PivotRule {
     }
 }
 
-/// A report filter (or, for a field also in Rows/Columns, its hidden-items filter).
+/// A report filter, an axis field's item selection or a filter rule.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PivotFilter {
     pub source_col: String,
     /// Item labels shown; `None` = all.
     pub selected: Option<Vec<String>>,
-    /// A label, value or Top 10 filter (row and column fields only). As in Excel without
+    /// A label, value or Top 10 filter, applied in Rows/Columns. A rule on a field outside
+    /// those areas is dormant and preserved for when the field returns, not a report filter.
+    /// As in Excel without
     /// "Allow multiple filters per field", a field has one kind of filter at a time: setting a
     /// rule clears `selected`, and selecting items clears the rule.
     pub rule: Option<PivotRule>,

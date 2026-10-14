@@ -621,22 +621,129 @@ fn label_value_and_top10_filters_round_trip() {
     }
 }
 
+/// Synthetic equivalent of PR #1207's field 14 in pivotTable2.xml and pivotTable3.xml.
+fn dormant_filter_workbook() -> Workbook {
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    sh.name = "Data".into();
+    for c in 0..15 {
+        let name = match c {
+            0 => "Region".into(),
+            1 => "Sales".into(),
+            14 => "Dormant".into(),
+            _ => format!("Unused{c}"),
+        };
+        sh.cells.set(CellRef::new(0, c), Cell::value(Value::text(name)));
+    }
+    for r in 1..=4 {
+        sh.cells.set(CellRef::new(r, 0), Cell::value(Value::text(if r <= 2 { "East" } else { "West" })));
+        sh.cells.set(CellRef::new(r, 1), Cell::value(Value::number(f64::from(r * 10))));
+        sh.cells.set(CellRef::new(r, 14), Cell::value(Value::number(f64::from(r % 2))));
+    }
+    for id in 1..=3 {
+        sh.pivots.push(PivotTable {
+            id,
+            name: format!("PivotTable{id}"),
+            source: "Data!$A$1:$O$5".into(),
+            anchor: CellRef::new(2, 16 + id * 3),
+            rows: vec![field("Region")],
+            values: vec![PivotValue { source_col: "Sales".into(), name: "Total".into(), ..PivotValue::default() }],
+            ..PivotTable::default()
+        });
+    }
+    wb
+}
+
+fn dormant_label_filter() -> PivotFilter {
+    PivotFilter {
+        source_col: "Dormant".into(),
+        selected: None,
+        rule: Some(PivotRule::Label { op: PivotCompare::Equals, value: "1".into(), value2: String::new() }),
+    }
+}
+
+#[test]
+fn reads_dormant_field14_filters_in_multiple_pivots() {
+    let mut parts = unzip(&write_xlsx(&dormant_filter_workbook()).unwrap());
+    // Inject Excel's reported XML independently of our filter writer.
+    for id in [2, 3] {
+        let path = format!("xl/pivotTables/pivotTable{id}.xml");
+        let table = String::from_utf8(parts.remove(&path).unwrap()).unwrap();
+        let table = table.replace(
+            "</pivotTableDefinition>",
+            r#"<filters count="1"><filter fld="14" type="captionEqual" evalOrder="-1" id="3" stringValue1="1"><autoFilter ref="A1"><filterColumn colId="0"><customFilters><customFilter operator="equal" val="1"/></customFilters></filterColumn></autoFilter></filter></filters></pivotTableDefinition>"#,
+        );
+        parts.insert(path, table.into_bytes());
+    }
+    let list: Vec<_> = parts.iter().map(|(n, d)| (n.as_str(), d.as_slice())).collect();
+    let (wb, report) = read_xlsx(&super::make_zip(&list)).unwrap();
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    for pt in wb.sheet(0).unwrap().pivots.iter().skip(1) {
+        assert_eq!(pt.filters, vec![dormant_label_filter()], "{} lost its dormant filter", pt.name);
+        assert_eq!(pt.rows, vec![field("Region")]);
+    }
+    let saved = write_xlsx(&wb).unwrap();
+    let parts = unzip(&saved);
+    for id in [2, 3] {
+        let table = xml::parse(parts.get(&format!("xl/pivotTables/pivotTable{id}.xml")).unwrap()).unwrap();
+        assert_eq!(table.child("filters").unwrap().child("filter").unwrap().attr("fld"), Some("14"));
+        assert!(table.child("pivotFields").unwrap().kids("pivotField").nth(14).unwrap().attr("axis").is_none());
+        assert!(table.child("pageFields").is_none());
+    }
+    let (back, report) = read_xlsx(&saved).unwrap();
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    assert_eq!(wb.sheet(0).unwrap().pivots, back.sheet(0).unwrap().pivots);
+}
+
+#[test]
+fn writes_dormant_label_value_and_top10_filters_without_page_fields() {
+    let rules = [
+        dormant_label_filter().rule.unwrap(),
+        PivotRule::Value { op: PivotCompare::Between, field: "Total".into(), value: 5.0, value2: 50.0 },
+        PivotRule::Top { top: false, count: 2.0, by: PivotTopBy::Items, field: "Total".into() },
+    ];
+    for rule in rules {
+        let mut wb = dormant_filter_workbook();
+        let filter = PivotFilter { source_col: "Dormant".into(), selected: None, rule: Some(rule) };
+        wb.sheet_mut(0).unwrap().pivots[0].filters.push(filter.clone());
+        for _ in 0..2 {
+            let bytes = write_xlsx(&wb).unwrap();
+            let parts = unzip(&bytes);
+            let table = xml::parse(parts.get("xl/pivotTables/pivotTable1.xml").unwrap()).unwrap();
+            assert!(table.child("pageFields").is_none(), "dormant rule became a report filter: {filter:?}");
+            assert_eq!(table.child("filters").unwrap().child("filter").unwrap().attr("fld"), Some("14"));
+            assert!(table.child("pivotFields").unwrap().kids("pivotField").nth(14).unwrap().attr("axis").is_none());
+            let (back, report) = read_xlsx(&bytes).unwrap();
+            assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+            assert_eq!(back.sheet(0).unwrap().pivots[0].filters, vec![filter.clone()]);
+            wb = back;
+        }
+    }
+}
+
 #[test]
 fn unsupported_and_hostile_pivot_filters() {
-    // A date filter (not modelled), a filter on a field that isn't an axis field, a value filter
-    // naming a missing value field and one with no number: each is skipped; a Top 10 without
-    // its `top10` element takes Excel's defaults.
+    // Unsupported dates, missing value fields/numbers and invalid cache fields are skipped.
+    // A rule on a field outside the axes is preserved; a Top 10 without its `top10` element
+    // takes Excel's defaults.
     let table = r#"<pivotTableDefinition name="F" cacheId="1"><location ref="A3:B6"/><pivotFields count="2"><pivotField axis="axisRow"><items><item x="0"/><item t="default"/></items></pivotField><pivotField dataField="1"/></pivotFields><rowFields><field x="0"/></rowFields><dataFields><dataField name="Total" fld="1"/></dataFields><filters><filter fld="0" type="thisMonth" id="1"/><filter fld="1" type="captionEqual" id="2" stringValue1="x"/><filter fld="0" type="valueEqual" iMeasureFld="7" id="3"/><filter fld="0" type="valueEqual" iMeasureFld="0" id="4"/><filter fld="99" type="count" id="5"/><filter fld="0" type="count" iMeasureFld="0" id="6"/></filters></pivotTableDefinition>"#;
     let (wb, report) = read_xlsx(&with_pivot(table, Some(GOOD_CACHE))).unwrap();
     let pt = &wb.sheet(0).unwrap().pivots[0];
     assert!(report.warnings.iter().any(|w| w.contains("thisMonth")), "{:?}", report.warnings);
     assert_eq!(
         pt.filters,
-        vec![PivotFilter {
-            source_col: "K".into(),
-            selected: None,
-            rule: Some(PivotRule::Top { top: true, count: 10.0, by: PivotTopBy::Items, field: "Total".into() }),
-        }]
+        vec![
+            PivotFilter {
+                source_col: "V".into(),
+                selected: None,
+                rule: Some(PivotRule::Label { op: PivotCompare::Equals, value: "x".into(), value2: String::new() }),
+            },
+            PivotFilter {
+                source_col: "K".into(),
+                selected: None,
+                rule: Some(PivotRule::Top { top: true, count: 10.0, by: PivotTopBy::Items, field: "Total".into() }),
+            },
+        ]
     );
 }
 

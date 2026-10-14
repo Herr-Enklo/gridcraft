@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-14 · **Change:** minor (§8: Group Selection, time grouping, calculated items, timelines and the label/value filter menus) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (§8: preserve dormant PivotTable filter rules on XLSX round-trip) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -83,7 +83,10 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   Formulas), Group Selection, date and time grouping with the Grouping dialog's bounds and Number
   of days, number ranges, timelines (sheet object, Timeline tab, XLSX timeline and timeline cache
   parts), label, value and Top 10 filters from the report's field buttons, values on rows,
-  PivotCharts, GETPIVOTDATA and the PivotTable Analyze and Design tabs. Missing: date filters
+  PivotCharts, GETPIVOTDATA and the PivotTable Analyze and Design tabs. Label, value and Top 10
+  rules on source fields outside Rows/Columns survive XLSX saves without filtering or adding
+  report-filter rows; adding the field to an axis reactivates its rule (synthetic regression tests).
+  Missing: date filters
   (relative periods), "allow multiple filters per field", OLAP and data-model pivots, Field
   Settings for row and column fields, a pivot cache shared by several PivotTables (a timeline
   filtering several PivotTables is saved to XLSX filtering the first). Checked in Excel 365 over
@@ -176,6 +179,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | §8: dormant label/value/Top 10 rules survive XLSX round-trips and reactivate when their field returns to Rows/Columns (#1207) |
 | 2026-10-14 | minor | §8: Group Selection, time grouping and the Grouping dialog, calculated items, timelines and the label/value filter menus landed; slicers on PivotTables and date filters remain |
 | 2026-10-14 | minor | §8: GETPIVOTDATA, Generate GetPivotData and the PivotTable Analyze and Design tabs; §15: 17 functions missing |
 | 2026-10-12 | minor | rows auto-fit oversized fonts on open and whole-row/column formatting (#833) |

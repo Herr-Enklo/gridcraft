@@ -1148,6 +1148,9 @@ pub fn compute(wb: &Workbook, pt: &PivotTable, pivot_sheet: usize) -> Result<Out
         .filter_map(|f| {
             let (c, g) = resolve_name(&src, pt, &f.source_col)?;
             let on_axis = pt.rows.iter().chain(pt.columns.iter()).any(|a| a.source_col.eq_ignore_ascii_case(&f.source_col));
+            if !on_axis && f.rule.is_some() {
+                return None;
+            }
             Some((c, f, g, !on_axis))
         })
         .collect();

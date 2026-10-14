@@ -967,7 +967,7 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn
     };
     let row_idx: Vec<usize> = c.axis_map.iter().take(pt.rows.len()).filter_map(|x| *x).collect();
     let col_idx: Vec<usize> = c.axis_map.iter().skip(pt.rows.len()).filter_map(|x| *x).collect();
-    // Filters: on an axis field → hidden items there; otherwise a page field.
+    // Rules off the axes are dormant, not page fields. Item selections off an axis are pages.
     let mut hidden: HashMap<usize, &PivotFilter> = HashMap::new();
     let mut pages: Vec<(usize, &PivotFilter)> = Vec::new();
     for f in &pt.filters {
@@ -978,7 +978,7 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn
                     hidden.insert(*i, f);
                 }
             }
-            None => {
+            None if f.rule.is_none() => {
                 if let Some(i) = find_page(&f.source_col)
                     && !pages.iter().any(|(j, _)| *j == i)
                 {
@@ -986,6 +986,7 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn
                     hidden.insert(i, f);
                 }
             }
+            None => {}
         }
     }
     let find_calc = |name: &str| c.fields.iter().position(|f| f.formula.is_some() && same(&f.name, name));
@@ -1222,7 +1223,11 @@ fn table_xml(pt: &PivotTable, idx: usize, cache_id: u32, c: &Cache, fmt_id: &dyn
         let _ = write!(s, " name=\"{}\"", esc_attr(&pt.style));
     }
     s.push_str(" showRowHeaders=\"1\" showColHeaders=\"1\" showRowStripes=\"0\" showColStripes=\"0\" showLastColumn=\"1\"/>");
-    filters_xml(&mut s, pt, &c.axis_map, &vals, extra_filters);
+    let filter_field = |name: &str| match pt.rows.iter().chain(pt.columns.iter()).position(|a| same(&a.source_col, name)) {
+        Some(p) => c.axis_map.get(p).copied().flatten(),
+        None => find_page(name),
+    };
+    filters_xml(&mut s, pt, &filter_field, &vals, extra_filters);
     s.push_str("</pivotTableDefinition>");
     s
 }
@@ -1274,16 +1279,15 @@ fn custom_filters(op: PivotCompare, a: &str, b: &str) -> String {
     format!("<customFilters{}>{}</customFilters>", if and { " and=\"1\"" } else { "" }, parts.concat())
 }
 
-/// `<filters>`: the label, value and Top 10 filters of the row and column fields. `fld` is the
+/// `<filters>`: active and dormant label, value and Top 10 filters. `fld` is the
 /// cache field and `iMeasureFld` the position of the value field in `<dataFields>`.
-fn filters_xml(s: &mut String, pt: &PivotTable, axis_map: &[Option<usize>], vals: &[(usize, &PivotValue)], extra: &[String]) {
+fn filters_xml(s: &mut String, pt: &PivotTable, field: &dyn Fn(&str) -> Option<usize>, vals: &[(usize, &PivotValue)], extra: &[String]) {
     let measure = |name: &str| vals.iter().position(|(_, v)| same(&v.name, name));
     let mut out = String::new();
     let mut n = 0;
     for f in &pt.filters {
         let Some(rule) = &f.rule else { continue };
-        let Some(pos) = pt.rows.iter().chain(pt.columns.iter()).position(|a| same(&a.source_col, &f.source_col)) else { continue };
-        let Some(Some(fld)) = axis_map.get(pos) else { continue };
+        let Some(fld) = field(&f.source_col) else { continue };
         let (ty, attrs, inner) = match rule {
             PivotRule::Label { op, value, value2 } => {
                 let mut attrs = format!(" stringValue1=\"{}\"", esc_attr(value));
@@ -1899,7 +1903,8 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32, timeline_filte
         }
     }
 
-    // Label, value and Top 10 filters of the row and column fields.
+    // Keep rules even when their field is not currently on an axis: Excel reactivates them
+    // when the field returns to Rows or Columns.
     if let Some(fs) = x.child("filters") {
         let names: Vec<String> = pt.values.iter().map(|v| v.name.clone()).collect();
         let measure = |i: u32| names.get(i as usize).cloned();
@@ -1908,14 +1913,13 @@ fn read_table(cx: &mut Ctx<'_>, x: &El, cache: &CacheIn, id: u32, timeline_filte
             if e.attr_u32("id").is_some_and(|id| timeline_filters.iter().any(|(p, f)| *f == id && same(p, &pt.name))) {
                 continue;
             }
-            let Some(name) = e.attr_u32("fld").and_then(|i| field_ref(cx, cache, i as usize)).map(|r| r.name) else { continue };
-            if !pt.rows.iter().chain(pt.columns.iter()).any(|f| same(&f.source_col, &name)) {
-                continue;
-            }
+            let Some(r) = e.attr_u32("fld").and_then(|i| field_ref(cx, cache, i as usize)) else { continue };
             let Some(rule) = read_filter(e, &measure) else {
                 cx.warn(format!("PivotTable \"{}\": filter type {} is not supported", pt.name, e.attr("type").unwrap_or("")));
                 continue;
             };
+            keep_manual(&mut manual, &r);
+            let name = r.name;
             // One filter per field: the rule replaces any hidden items.
             pt.filters.retain(|f| !same(&f.source_col, &name));
             pt.filters.push(PivotFilter { source_col: name, selected: None, rule: Some(rule) });

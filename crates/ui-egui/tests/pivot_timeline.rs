@@ -63,6 +63,24 @@ fn pivot(h: &egui_kittest::Harness<'static, SheetApp>) -> gridcraft_engine::mode
 }
 
 #[test]
+fn dormant_filter_rule_has_no_report_filter_button() {
+    use gridcraft_engine::model::{PivotCompare, PivotFilter, PivotRule};
+    let s = sales_pivot();
+    let mut sheet = s.active().unwrap().wb.active().unwrap().clone();
+    let before = gridcraft_ui_egui::pivot_ui::header_buttons(&sheet);
+    sheet.pivots[0].filters.push(PivotFilter {
+        source_col: "Date".into(),
+        selected: None,
+        rule: Some(PivotRule::Label { op: PivotCompare::Equals, value: "1".into(), value2: String::new() }),
+    });
+    let after = gridcraft_ui_egui::pivot_ui::header_buttons(&sheet);
+    assert_eq!(after.len(), before.len());
+    assert_eq!(after[0].cell, before[0].cell);
+    assert_eq!(after[0].fields, before[0].fields);
+    assert!(!after[0].page);
+}
+
+#[test]
 fn row_labels_button_opens_label_and_value_filters() {
     let mut h = harness(sales_pivot());
     let sheet = h.state().session.active().unwrap().wb.active().unwrap().clone();

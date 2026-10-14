@@ -547,8 +547,8 @@ fn add_to_area(
             }
             let existing = take_from_axes(pt, &field).unwrap_or_else(|| PivotField { source_col: field.clone(), ..Default::default() });
             // A report filter that selects nothing in particular goes away; a selection stays
-            // as the field's hidden items.
-            pt.filters.retain(|f| !(f.source_col.eq_ignore_ascii_case(&field) && f.selected.is_none()));
+            // as the field's hidden items, and a dormant rule becomes active again.
+            pt.filters.retain(|f| !(f.source_col.eq_ignore_ascii_case(&field) && f.selected.is_none() && f.rule.is_none()));
             insert_axis_field(pt, area == "rows", existing, position);
         }
         "values" => {
@@ -624,7 +624,7 @@ fn remove_from_area(cmd: &str, pt: &mut PivotTable, field: &str, area: &str) -> 
             let i = pt
                 .filters
                 .iter()
-                .position(|f| f.source_col.eq_ignore_ascii_case(field) && !in_axes(pt, &f.source_col))
+                .position(|f| f.source_col.eq_ignore_ascii_case(field) && f.rule.is_none() && !in_axes(pt, &f.source_col))
                 .ok_or_else(|| bad(cmd, format!("`{field}` isn't in the filters area")))?;
             Ok(pt.filters.remove(i).source_col)
         }
@@ -854,7 +854,7 @@ fn pivot_json(wb: &Workbook, si: usize, pt: &PivotTable) -> Json {
         "rows": pt.rows.iter().map(axis_json).collect::<Vec<_>>(),
         "columns": pt.columns.iter().map(axis_json).collect::<Vec<_>>(),
         "values": pt.values.iter().map(|v| json!({"field": v.source_col, "func": func_name(v.func), "name": v.name, "showAs": show_as_name(v.show_as), "baseField": v.base_field, "baseItem": v.base_item, "numberFormat": v.number_format})).collect::<Vec<_>>(),
-        "filters": pt.filters.iter().map(|f| json!({"field": f.source_col, "selected": f.selected, "rule": f.rule.as_ref().map(rule_json), "report": !in_axes(pt, &f.source_col)})).collect::<Vec<_>>(),
+        "filters": pt.filters.iter().map(|f| json!({"field": f.source_col, "selected": f.selected, "rule": f.rule.as_ref().map(rule_json), "report": f.rule.is_none() && !in_axes(pt, &f.source_col)})).collect::<Vec<_>>(),
         "layout": layout_name(pt.layout),
         "grandTotalsRows": pt.grand_totals_rows,
         "grandTotalsCols": pt.grand_totals_cols,
@@ -891,7 +891,7 @@ fn fields(s: &mut Session, p: &Json) -> Result<Json> {
                 if pt.values.iter().any(|f| f.source_col.eq_ignore_ascii_case(h)) {
                     areas.push("values");
                 }
-                if pt.filters.iter().any(|f| f.source_col.eq_ignore_ascii_case(h)) && !in_axes(pt, h) {
+                if pt.filters.iter().any(|f| f.source_col.eq_ignore_ascii_case(h) && f.rule.is_none()) && !in_axes(pt, h) {
                     areas.push("filters");
                 }
                 json!({
@@ -917,7 +917,7 @@ fn fields(s: &mut Session, p: &Json) -> Result<Json> {
                 areas.push(key);
             }
         }
-        if pt.filters.iter().any(|f| f.source_col.eq_ignore_ascii_case(&g.name)) && !in_axes(pt, &g.name) {
+        if pt.filters.iter().any(|f| f.source_col.eq_ignore_ascii_case(&g.name) && f.rule.is_none()) && !in_axes(pt, &g.name) {
             areas.push("filters");
         }
         let samples: Vec<&str> = g.groups.iter().take(5).map(|x| x.name.as_str()).collect();
@@ -1369,17 +1369,18 @@ fn set_rule(cmd: &str, pt: &mut PivotTable, field: &str, rule: PivotRule) -> Res
 /// Follows a value field's change of caption in the rules that use it, or drops those rules
 /// (`to: None`) when the value field is removed.
 fn retarget_rules(pt: &mut PivotTable, from: &str, to: Option<&str>) {
-    for f in pt.filters.iter_mut() {
-        let Some(rule) = f.rule.as_mut() else { continue };
-        let (PivotRule::Value { field, .. } | PivotRule::Top { field, .. }) = rule else { continue };
+    pt.filters.retain_mut(|f| {
+        let Some(rule) = f.rule.as_mut() else { return true };
+        let (PivotRule::Value { field, .. } | PivotRule::Top { field, .. }) = rule else { return true };
         if !field.eq_ignore_ascii_case(from) {
-            continue;
+            return true;
         }
         match to {
             Some(n) => *field = n.to_string(),
-            None => f.rule = None,
+            None => return false,
         }
-    }
+        true
+    });
     let axis: Vec<String> = pt.rows.iter().chain(pt.columns.iter()).map(|f| f.source_col.clone()).collect();
     pt.filters.retain(|f| f.selected.is_some() || f.rule.is_some() || !axis.iter().any(|a| a.eq_ignore_ascii_case(&f.source_col)));
 }
@@ -1459,9 +1460,9 @@ fn clear_filter(s: &mut Session, p: &Json) -> Result<Json> {
             return Err(bad(C, format!("`{n}` isn't a field of the PivotTable")));
         }
         let hit = |f: &PivotFilter| field.as_ref().is_none_or(|n| f.source_col.eq_ignore_ascii_case(n));
-        // A row or column field's filter goes; a report filter stays in its area, showing all.
+        // Axis and dormant rules go; a report filter stays in its area, showing all.
         let axis: Vec<String> = pt.rows.iter().chain(pt.columns.iter()).map(|f| f.source_col.clone()).collect();
-        pt.filters.retain(|f| !(hit(f) && axis.iter().any(|a| a.eq_ignore_ascii_case(&f.source_col))));
+        pt.filters.retain(|f| !(hit(f) && (f.rule.is_some() || axis.iter().any(|a| a.eq_ignore_ascii_case(&f.source_col)))));
         for f in pt.filters.iter_mut().filter(|f| hit(f)) {
             f.selected = None;
             f.rule = None;
@@ -1915,7 +1916,7 @@ fn clear_all(s: &mut Session, p: &Json) -> Result<Json> {
 fn clear_filters(s: &mut Session, p: &Json) -> Result<Json> {
     update(s, p, |pt, _, _| {
         let axes: Vec<String> = pt.rows.iter().chain(pt.columns.iter()).map(|f| f.source_col.to_ascii_lowercase()).collect();
-        pt.filters.retain(|f| !axes.contains(&f.source_col.to_ascii_lowercase()));
+        pt.filters.retain(|f| f.rule.is_none() && !axes.contains(&f.source_col.to_ascii_lowercase()));
         for f in &mut pt.filters {
             f.selected = None;
         }
@@ -2098,6 +2099,7 @@ fn recommended(s: &mut Session, p: &Json) -> Result<Json> {
 #[cfg(test)]
 mod tests {
     use gridcraft_core::{CellError, CellRef, Value};
+    use gridcraft_model::{PivotCompare, PivotFilter, PivotRule, PivotTopBy};
     use serde_json::{Value as Json, json};
 
     use crate::Session;
@@ -2286,6 +2288,140 @@ mod tests {
     fn grand_total(s: &Session) -> Value {
         let row = find_row(s, "Grand Total").expect("a Grand Total row");
         val(s, &CellRef::new(row, pt(s).last_range.unwrap().start.col + 1).a1())
+    }
+
+    fn dormant_product_rules() -> [(PivotRule, f64); 3] {
+        [
+            (PivotRule::Label { op: PivotCompare::Equals, value: "Pears".into(), value2: String::new() }, 270.0),
+            (PivotRule::Value { op: PivotCompare::GreaterOrEqual, field: "Sum of Sales".into(), value: 270.0, value2: 0.0 }, 690.0),
+            (PivotRule::Top { top: true, count: 1.0, by: PivotTopBy::Items, field: "Sum of Sales".into() }, 420.0),
+        ]
+    }
+
+    fn add_dormant_product_rule(s: &mut Session, rule: PivotRule) -> Vec<PivotFilter> {
+        // XLSX can retain a rule on a pivotField that has no axis. Build that state without
+        // an external workbook or using a command that requires the field to be on an axis.
+        let d = s.doc_mut().unwrap();
+        let active = d.wb.active_sheet;
+        let p = std::sync::Arc::make_mut(&mut d.wb).sheet_mut(active).unwrap().pivots.last_mut().unwrap();
+        p.filters.push(PivotFilter { source_col: "Product".into(), selected: None, rule: Some(rule) });
+        p.filters.clone()
+    }
+
+    fn pivot_report_values(s: &Session) -> Vec<Value> {
+        // Include the report-filter rows above the anchor and the empty cells around the report.
+        (0..20).flat_map(|row| (0..8).map(move |col| val(s, &CellRef::new(row, col).a1()))).collect()
+    }
+
+    #[test]
+    fn dormant_filter_rules_do_not_change_report_on_refresh() {
+        for (rule, _) in dormant_product_rules() {
+            let mut s = sales();
+            s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"]})).unwrap();
+            let before = pt(&s);
+            let cells = s.doc().unwrap().wb.active().unwrap().cells.clone();
+            let filters = add_dormant_product_rule(&mut s, rule);
+            s.execute("pivot.refresh", json!({})).unwrap();
+            assert_eq!(pt(&s).filters, filters);
+            assert_eq!(pt(&s).anchor, before.anchor, "a dormant rule is not a report-filter row");
+            assert_eq!(pt(&s).last_range, before.last_range);
+            assert_eq!(s.doc().unwrap().wb.active().unwrap().cells, cells, "a dormant rule leaves the rendered cells and styles unchanged");
+            assert_eq!(grand_total(&s), Value::Number(TOTAL));
+            let info = s.execute("pivot.fields", json!({})).unwrap();
+            assert_eq!(info["fields"][1]["name"], "Product");
+            assert_eq!(info["fields"][1]["areas"], json!([]), "a dormant rule does not place its field in Filters");
+            assert_eq!(info["filters"][0]["report"], false);
+        }
+    }
+
+    #[test]
+    fn dormant_filter_rules_round_trip_and_activate_in_rows_or_columns() {
+        for area in ["rows", "columns"] {
+            for (rule, filtered_total) in dormant_product_rules() {
+                let mut s = sales();
+                s.execute("insert.pivotTable", json!({"values": ["Sales"]})).unwrap();
+                let before = pt(&s);
+                let cells = pivot_report_values(&s);
+                let filters = add_dormant_product_rule(&mut s, rule);
+                // A second save proves the imported rule is modelled, rather than only retained
+                // in opaque XML from the first file.
+                for _ in 0..2 {
+                    let b64 = s.execute("file.saveBytes", json!({"format": "xlsx"})).unwrap()["base64"].as_str().unwrap().to_string();
+                    s.execute("file.open", json!({"name": "dormant-filters.xlsx", "base64": b64})).unwrap();
+                    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+                    assert_eq!(pt(&s).filters, filters, "the rule must survive XLSX while its field has no axis");
+                    assert_eq!(pt(&s).anchor, before.anchor);
+                    assert_eq!(pt(&s).last_range, before.last_range);
+                    assert_eq!(pivot_report_values(&s), cells);
+                    s.execute("pivot.refresh", json!({})).unwrap();
+                    assert_eq!(pt(&s).anchor, before.anchor);
+                    assert_eq!(pt(&s).last_range, before.last_range);
+                    assert_eq!(pivot_report_values(&s), cells);
+                }
+                s.execute("pivot.addField", json!({"field": "Product", "area": area})).unwrap();
+                assert_eq!(pt(&s).filters, filters, "adding the field to an axis must activate its saved rule");
+                let report = pt(&s);
+                assert_eq!(val(&s, &report.last_range.unwrap().end.a1()), Value::Number(filtered_total));
+                assert!(report.rows.iter().chain(report.columns.iter()).any(|f| f.source_col == "Product"));
+            }
+        }
+    }
+
+    #[test]
+    fn clear_filter_removes_dormant_rules_and_keeps_report_filters() {
+        for (command, params) in
+            [("pivot.clearFilter", json!({"field": "Product"})), ("pivot.clearFilter", json!({})), ("pivot.clearFilters", json!({}))]
+        {
+            for (rule, _) in dormant_product_rules() {
+                let mut s = sales();
+                s.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales"], "filters": ["Date"]})).unwrap();
+                let before = pt(&s);
+                let cells = s.doc().unwrap().wb.active().unwrap().cells.clone();
+                add_dormant_product_rule(&mut s, rule);
+                s.execute(command, params.clone()).unwrap();
+                assert_eq!(pt(&s).filters, before.filters, "clearing the rule must not leave a Product report filter");
+                assert_eq!(pt(&s).anchor, before.anchor);
+                assert_eq!(pt(&s).last_range, before.last_range);
+                assert_eq!(s.doc().unwrap().wb.active().unwrap().cells, cells);
+            }
+        }
+    }
+
+    #[test]
+    fn dormant_value_rules_follow_value_field_rename_and_removal() {
+        for (rule, _) in dormant_product_rules().into_iter().skip(1) {
+            let mut s = sales();
+            let mut control = sales();
+            for session in [&mut s, &mut control] {
+                session.execute("insert.pivotTable", json!({"rows": ["Region"], "values": ["Sales", "Units"], "filters": ["Date"]})).unwrap();
+            }
+            add_dormant_product_rule(&mut s, rule);
+            for session in [&mut s, &mut control] {
+                session.execute("pivot.valueSettings", json!({"field": "Sum of Sales", "name": "Revenue"})).unwrap();
+            }
+            let renamed = pt(&s);
+            assert_eq!(renamed.filters.len(), 2);
+            assert_eq!(renamed.filters[1].rule.as_ref().and_then(PivotRule::value_field), Some("Revenue"));
+            assert_eq!(renamed.filters[1].selected, None);
+            assert_eq!(renamed.anchor, pt(&control).anchor);
+            assert_eq!(renamed.last_range, pt(&control).last_range);
+            assert_eq!(s.doc().unwrap().wb.active().unwrap().cells, control.doc().unwrap().wb.active().unwrap().cells);
+            let info = s.execute("pivot.fields", json!({})).unwrap();
+            assert_eq!(info["fields"][1]["areas"], json!([]));
+            assert_eq!(info["filters"][1]["report"], false);
+            for session in [&mut s, &mut control] {
+                session.execute("pivot.removeField", json!({"field": "Revenue", "area": "values"})).unwrap();
+            }
+            assert_eq!(
+                pt(&s).filters,
+                pt(&control).filters,
+                "removing the value field removes its dormant rule without creating a Product report filter"
+            );
+            assert_eq!(pt(&s).anchor, pt(&control).anchor);
+            assert_eq!(pt(&s).last_range, pt(&control).last_range);
+            assert_eq!(s.doc().unwrap().wb.active().unwrap().cells, control.doc().unwrap().wb.active().unwrap().cells);
+            assert_eq!(grand_total(&s), Value::Number(72.0));
+        }
     }
 
     #[test]

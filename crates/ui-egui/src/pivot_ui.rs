@@ -92,7 +92,7 @@ pub fn header_buttons(sh: &Sheet) -> Vec<HeaderButton> {
         let on_axis = |f: &str| pt.rows.iter().chain(pt.columns.iter()).any(|a| a.source_col.eq_ignore_ascii_case(f));
         let a = pt.anchor;
         // Report filters sit above the body, one row each, then a blank row.
-        let pages: Vec<&str> = pt.filters.iter().map(|f| f.source_col.as_str()).filter(|f| !on_axis(f)).collect();
+        let pages: Vec<&str> = pt.filters.iter().filter(|f| f.rule.is_none() && !on_axis(&f.source_col)).map(|f| f.source_col.as_str()).collect();
         let top = a.row.saturating_sub(pages.len() as u32 + u32::from(!pages.is_empty()));
         for (i, f) in pages.iter().enumerate() {
             out.push(HeaderButton {
