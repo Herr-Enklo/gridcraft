@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (PivotTable Analyze and PivotTable Design contextual tabs) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** minor (Timeline tab, PivotTable field buttons with Label and Value Filters, Grouping and Calculated Item dialogs) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -15,7 +15,7 @@ Sources: `crates/ui-egui/src` (ribbon, grid, editor, formula bar, dialogs, panes
 | Element | Excel | GridCraft | Status |
 |---|---|---|---|
 | Title bar, Quick Access Toolbar, AutoSave toggle | yes | yes | done; macOS window controls misaligned (#170), Dock icon size (#169) |
-| Ribbon: tabs, groups, split buttons, galleries, contextual tabs | yes | yes (Table Design, Chart Design, Format, PivotTable Analyze and PivotTable Design (key tips JT, JY; controls GridCraft lacks stay disabled with the reason), Header & Footer tabs) | done; missing contextual tabs for pictures, shapes, sparklines, slicers |
+| Ribbon: tabs, groups, split buttons, galleries, contextual tabs | yes | yes (Table Design, Chart Design, Format, PivotTable Analyze and PivotTable Design (key tips JT, JY; controls GridCraft lacks stay disabled with the reason), Timeline, Header & Footer tabs) | done; missing contextual tabs for pictures, shapes, sparklines, slicers |
 | Ribbon collapse, simplified ribbon, customize ribbon/QAT | yes | partial | customization missing (File ▸ Options is the one missing File command) |
 | Ribbon: tabs, groups, split buttons, galleries, contextual tabs | yes | yes (Table Design, Chart Design, Format, PivotTable tabs) | done; missing contextual tabs for pictures, shapes, sparklines, header/footer, slicers |
 | Ribbon collapse, simplified ribbon, customize ribbon/QAT | yes | partial | customization missing |
@@ -161,6 +161,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | Timeline contextual tab; Insert › Filters › Timeline; PivotTable report field buttons (Row Labels, Column Labels, field headers, report filters) with Sort, Label Filters ▸, Value Filters ▸ and the item checklist; Label Filter, Value Filter, Top 10, Grouping, Insert Calculated Item, Solve Order, Insert Timelines and Report Connections dialogs |
 | 2026-10-13 | minor | PivotTable Analyze and PivotTable Design contextual tabs with Excel 365's groups and German labels; Clear All and Clear Filters commands |
 | 2026-10-12 | minor | The File view's recent list tells when each workbook was last changed, read off the UI thread |
 | 2026-10-13 | minor | Horizontal scrollbar in the sheet tab bar: drag, track click pages, frozen columns excluded from the page (#840) |
