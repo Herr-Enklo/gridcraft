@@ -97,6 +97,7 @@ save, because the table part is rewritten. Loaded results are ordinary tables. C
 | 2026-10-15 | minor | Excel's Power Query queries refresh from their M formulas (DataMashup kept byte for byte) |
 | 2026-10-14 | minor | Excel's Power Query queries are read from the DataMashup part and listed read-only; the part stays byte for byte |
 | 2026-10-14 | minor | Get & Transform sources listed; query definitions round-trip in a GridCraft custom XML part beside Excel's kept DataMashup |
+| 2026-10-14 | trivial | Formula parser: text longer than Excel's 8,192 characters, and postfix chains (`1%%%…`, `f(1)(1)…`) past the 256-level nesting limit, are parse errors (the cell keeps its formula text and cached value) instead of trees deep enough to overflow the stack when a hostile file is opened, saved or dropped |
 | 2026-10-12 | trivial | XLSX chart sheets are kept on save (#727) |
 | 2026-10-12 | trivial | CSV and TSV export is capped at 512 MiB and refuses a larger used range with an error (#528) |
 | 2026-10-12 | minor | `.xls` import reads the calculation settings (CalcMode, CalcIter, CalcCount, CalcDelta, CalcPrecision), so circular models calculate instead of showing `#CIRC!` (#724) |
